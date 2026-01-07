@@ -1,0 +1,111 @@
+Email,User_ID,Access_Date,Action_Type,Role,Permission_Set,Effective_Access,Group_ID
+user45@atko.email,U0053,2025-02-21T23:05:51Z,DELETE,Security,SYSTEM_ADMIN_ALL,Permitted,GeneralGroup
+user21@atko.email,U0029,2025-09-17T23:05:51Z,UPDATE,Viewer,HR_VIEW,Denied,GeneralGroup
+john.doe@atko.email,U0002,2025-08-05T23:05:51Z,CHECK_PERMS,Finance,HR_VIEW,Denied,GeneralGroup
+user28@atko.email,U0036,2024-12-20T23:05:51Z,WRITE,Sales,SYSTEM_ADMIN_ALL,Denied,GeneralGroup
+user48@atko.email,U0056,2024-12-08T23:05:51Z,LOGOUT,IT_Ops,SYSTEM_ADMIN_ALL,Denied,GeneralGroup
+user36@atko.email,U0044,2025-12-02T23:05:51Z,LOGOUT,Employee,GENERAL_USER,Denied,GeneralGroup
+ashwin.ramnarayanan@okta.com,U0001,2025-10-23T23:05:51Z,READ,Auditor,FIN_PROCESS_APPR,Denied,GeneralGroup
+user8@atko.email,U0016,2025-10-03T23:05:51Z,CHECK_PERMS,Security,READ_ONLY,Permitted,GeneralGroup
+user26@atko.email,U0034,2025-11-06T23:05:51Z,LOGOUT,HR,GENERAL_USER,Permitted,GeneralGroup
+user22@atko.email,U0030,2025-03-24T23:05:51Z,EXECUTE,Viewer,GENERAL_USER,Denied,GeneralGroup
+user34@atko.email,U0042,2024-12-24T23:05:51Z,WRITE,Viewer,IT_MAINTAIN,Permitted,GeneralGroup
+ashwin.ramnarayanan@okta.com,U0001,2024-12-24T23:05:51Z,CHECK_PERMS,Sales,READ_ONLY,Denied,GeneralGroup
+user44@atko.email,U0052,2025-06-19T23:05:51Z,CHECK_PERMS,Payment Processor,AUDIT_READ,Denied,GeneralGroup
+user31@atko.email,U0039,2025-08-12T23:05:51Z,CHECK_PERMS,Security,FIN_PROCESS_APPR,Denied,GeneralGroup
+user8@atko.email,U0016,2025-05-30T23:05:51Z,UPDATE,Viewer,AUDIT_READ,Permitted,GeneralGroup
+user3@atko.email,U0011,2025-01-10T23:05:51Z,EXECUTE,Security,FINANCE_EDIT,Permitted,GeneralGroup
+max@atko.email,U0007,2025-08-23T23:05:51Z,EXECUTE,Sales,READ_ONLY,Denied,GeneralGroup
+user45@atko.email,U0053,2025-05-25T23:05:51Z,CHECK_PERMS,Payment Processor,SYSTEM_ADMIN_ALL,Denied,GeneralGroup
+user27@atko.email,U0035,2025-07-04T23:05:51Z,WRITE,Sales,IT_MAINTAIN,Permitted,GeneralGroup
+user34@atko.email,U0042,2024-12-13T23:05:51Z,EXECUTE,Auditor,SYSTEM_ADMIN_ALL,Permitted,GeneralGroup
+user33@atko.email,U0041,2025-02-15T23:05:51Z,CREATE NEW VENDOR,Sales,AUDIT_READ,Permitted,GeneralGroup
+user43@atko.email,U0051,2025-06-11T23:05:51Z,LOGIN,Finance,READ_ONLY,Permitted,GeneralGroup
+creep.user@atko.email,U9999,2025-02-24T23:05:51Z,UPDATE,Finance,SYSTEM_ADMIN_ALL,Denied,GeneralGroup
+user15@atko.email,U0023,2025-02-11T23:05:51Z,CHECK_PERMS,Sales,SECURITY_EXECUTE,Permitted,GeneralGroup
+user20@atko.email,U0028,2025-09-22T23:05:51Z,LOGOUT,IT_Ops,READ_ONLY,Denied,GeneralGroup
+harms.rosa@atko.email,U0003,2025-04-06T23:05:51Z,EXECUTE,HR,IT_MAINTAIN,Denied,GeneralGroup
+user8@atko.email,U0016,2025-01-21T23:05:51Z,WRITE,Viewer,FINANCE_EDIT,Denied,GeneralGroup
+user40@atko.email,U0048,2025-02-17T23:05:51Z,DELETE,Auditor,AUDIT_READ,Denied,GeneralGroup
+user40@atko.email,U0048,2025-08-21T23:05:51Z,APPROVE,Payment Processor,HR_VIEW,Denied,GeneralGroup
+ivan@atko.email,U0006,2025-08-13T23:05:51Z,WRITE,Sales,FIN_PROCESS_APPR,Denied,GeneralGroup
+user38@atko.email,U0046,2024-12-22T23:05:51Z,READ,Employee,AUDIT_READ,Denied,GeneralGroup
+user34@atko.email,U0042,2025-06-06T23:05:51Z,UPDATE,Viewer,IT_MAINTAIN,Permitted,GeneralGroup
+harms.rosa@atko.email,U0003,2025-02-25T23:05:51Z,APPROVE,Employee,SYSTEM_ADMIN_ALL,Denied,GeneralGroup
+user2@atko.email,U0010,2025-09-09T23:05:51Z,CHECK_PERMS,Security,READ_ONLY,Permitted,GeneralGroup
+user38@atko.email,U0046,2025-02-22T23:05:51Z,CHECK_PERMS,Payment Processor,READ_ONLY,Denied,GeneralGroup
+user40@atko.email,U0048,2025-10-31T23:05:51Z,UPDATE,IT_Ops,FIN_PROCESS_APPR,Permitted,GeneralGroup
+user19@atko.email,U0027,2025-02-24T23:05:51Z,CHECK_PERMS,Payment Processor,AUDIT_READ,Denied,GeneralGroup
+user17@atko.email,U0025,2025-08-16T23:05:51Z,LOGOUT,Security,IT_MAINTAIN,Permitted,GeneralGroup
+user36@atko.email,U0044,2025-11-04T23:05:51Z,LOGIN,Payment Processor,FIN_VENDOR_CREATOR,Permitted,GeneralGroup
+user27@atko.email,U0035,2025-06-21T23:05:51Z,CHECK_PERMS,IT_Ops,FIN_PROCESS_APPR,Denied,GeneralGroup
+user38@atko.email,U0046,2025-08-28T23:05:51Z,CREATE NEW VENDOR,Auditor,READ_ONLY,Permitted,GeneralGroup
+user14@atko.email,U0022,2025-05-28T23:05:51Z,LOGOUT,Admin,SALES_VIEW,Denied,GeneralGroup
+user38@atko.email,U0046,2025-04-17T23:05:51Z,WRITE,Sales,SALES_VIEW,Permitted,GeneralGroup
+user43@atko.email,U0051,2025-01-07T23:05:51Z,UPDATE,Finance,SYSTEM_ADMIN_ALL,Denied,GeneralGroup
+user20@atko.email,U0028,2025-03-16T23:05:51Z,EXECUTE,Finance,HR_VIEW,Permitted,GeneralGroup
+ashwin.ramnarayanan@okta.com,U0001,2025-01-17T23:05:51Z,CREATE NEW VENDOR,Admin,SYSTEM_ADMIN_ALL,Permitted,GeneralGroup
+kobe.doe@atko.email,U0005,2025-02-07T23:05:51Z,LOGOUT,Sales,HR_VIEW,Denied,GeneralGroup
+user43@atko.email,U0051,2025-11-06T23:05:51Z,LOGOUT,HR,SALES_VIEW,Denied,GeneralGroup
+user19@atko.email,U0027,2025-04-19T23:05:51Z,LOGIN,HR,READ_ONLY,Denied,GeneralGroup
+user13@atko.email,U0021,2025-03-19T23:05:51Z,CREATE NEW VENDOR,Sales,HR_VIEW,Permitted,GeneralGroup
+user4@atko.email,U0012,2025-04-28T23:05:51Z,READ,Sales,FIN_PROCESS_APPR,Denied,GeneralGroup
+harms.rosa@atko.email,U0003,2025-12-06T23:05:51Z,DELETE,Security,FIN_VENDOR_CREATOR,Denied,GeneralGroup
+user29@atko.email,U0037,2025-08-10T23:05:51Z,APPROVE,Admin,GENERAL_USER,Permitted,GeneralGroup
+ashwin.ramnarayanan@okta.com,U0001,2025-05-24T23:05:51Z,CHECK_PERMS,Security,FIN_PROCESS_APPR,Denied,GeneralGroup
+user8@atko.email,U0016,2025-01-15T23:05:51Z,LOGIN,Finance,HR_VIEW,Denied,GeneralGroup
+user10@atko.email,U0018,2025-08-02T23:05:51Z,LOGOUT,Security,SECURITY_EXECUTE,Permitted,GeneralGroup
+user23@atko.email,U0031,2025-08-07T23:05:51Z,CREATE NEW VENDOR,IT_Ops,SALES_VIEW,Denied,GeneralGroup
+user15@atko.email,U0023,2025-06-22T23:05:51Z,UPDATE,Payment Processor,FIN_PROCESS_APPR,Permitted,GeneralGroup
+user9@atko.email,U0017,2025-08-16T23:05:51Z,DELETE,IT_Ops,FINANCE_EDIT,Permitted,GeneralGroup
+user20@atko.email,U0028,2025-01-08T23:05:51Z,WRITE,HR,SYSTEM_ADMIN_ALL,Denied,GeneralGroup
+user15@atko.email,U0023,2025-04-15T23:05:51Z,DELETE,Auditor,HR_VIEW,Permitted,GeneralGroup
+user2@atko.email,U0010,2025-08-28T23:05:51Z,EXECUTE,IT_Ops,FINANCE_EDIT,Permitted,GeneralGroup
+user23@atko.email,U0031,2025-11-22T23:05:51Z,APPROVE,HR,GENERAL_USER,Denied,GeneralGroup
+user3@atko.email,U0011,2025-03-24T23:05:51Z,WRITE,Employee,FIN_VENDOR_CREATOR,Denied,GeneralGroup
+user40@atko.email,U0048,2025-09-22T23:05:51Z,CREATE NEW VENDOR,IT_Ops,FINANCE_EDIT,Permitted,GeneralGroup
+user31@atko.email,U0039,2024-12-23T23:05:51Z,LOGOUT,Employee,FINANCE_EDIT,Denied,GeneralGroup
+user23@atko.email,U0031,2025-12-06T23:05:51Z,DELETE,Employee,FIN_VENDOR_CREATOR,Denied,GeneralGroup
+user32@atko.email,U0040,2025-10-25T23:05:51Z,UPDATE,Auditor,GENERAL_USER,Permitted,GeneralGroup
+user19@atko.email,U0027,2025-01-26T23:05:51Z,CHECK_PERMS,Admin,FINANCE_EDIT,Denied,GeneralGroup
+user16@atko.email,U0024,2025-02-19T23:05:51Z,READ,IT_Ops,READ_ONLY,Permitted,GeneralGroup
+user2@atko.email,U0010,2025-08-20T23:05:51Z,LOGIN,HR,FIN_PROCESS_APPR,Denied,GeneralGroup
+user12@atko.email,U0020,2025-08-12T23:05:51Z,LOGOUT,HR,FIN_VENDOR_CREATOR,Denied,GeneralGroup
+user38@atko.email,U0046,2025-10-06T23:05:51Z,WRITE,HR,FINANCE_EDIT,Permitted,GeneralGroup
+samantha.driver@atko.email,U0004,2025-08-05T23:05:51Z,LOGOUT,Payment Processor,HR_VIEW,Denied,GeneralGroup
+user23@atko.email,U0031,2025-11-02T23:05:51Z,LOGOUT,Admin,READ_ONLY,Permitted,GeneralGroup
+user28@atko.email,U0036,2025-06-07T23:05:51Z,DELETE,Auditor,SALES_VIEW,Permitted,GeneralGroup
+user6@atko.email,U0014,2025-05-01T23:05:51Z,CREATE NEW VENDOR,Finance,READ_ONLY,Denied,GeneralGroup
+user37@atko.email,U0045,2024-12-10T23:05:51Z,CREATE NEW VENDOR,Finance,FINANCE_EDIT,Permitted,GeneralGroup
+user40@atko.email,U0048,2025-12-04T23:05:51Z,CREATE NEW VENDOR,Admin,FIN_PROCESS_APPR,Permitted,GeneralGroup
+user18@atko.email,U0026,2025-06-13T23:05:51Z,DELETE,Employee,SYSTEM_ADMIN_ALL,Denied,GeneralGroup
+user44@atko.email,U0052,2025-04-29T23:05:51Z,CHECK_PERMS,IT_Ops,AUDIT_READ,Permitted,GeneralGroup
+user3@atko.email,U0011,2025-09-09T23:05:51Z,LOGIN,IT_Ops,SYSTEM_ADMIN_ALL,Permitted,GeneralGroup
+creep.user@atko.email,U9999,2025-04-06T23:05:51Z,DELETE,Payment Processor,GENERAL_USER,Denied,GeneralGroup
+harms.rosa@atko.email,U0003,2025-10-24T23:05:51Z,CREATE NEW VENDOR,Auditor,IT_MAINTAIN,Permitted,GeneralGroup
+user48@atko.email,U0056,2025-10-30T23:05:51Z,DELETE,Sales,READ_ONLY,Permitted,GeneralGroup
+user7@atko.email,U0015,2025-05-28T23:05:51Z,LOGIN,Security,SYSTEM_ADMIN_ALL,Permitted,GeneralGroup
+user14@atko.email,U0022,2024-12-30T23:05:51Z,READ,Employee,SECURITY_EXECUTE,Denied,GeneralGroup
+user0@atko.email,U0008,2025-09-13T23:05:51Z,LOGIN,HR,HR_VIEW,Permitted,GeneralGroup
+user6@atko.email,U0014,2025-06-06T23:05:51Z,LOGOUT,Employee,AUDIT_READ,Denied,GeneralGroup
+user26@atko.email,U0034,2025-02-24T23:05:51Z,APPROVE,Finance,FIN_VENDOR_CREATOR,Denied,GeneralGroup
+user1@atko.email,U0009,2025-03-19T23:05:51Z,UPDATE,Security,SYSTEM_ADMIN_ALL,Denied,GeneralGroup
+user41@atko.email,U0049,2024-12-20T23:05:51Z,LOGOUT,Payment Processor,GENERAL_USER,Denied,GeneralGroup
+user22@atko.email,U0030,2025-03-05T23:05:51Z,APPROVE,HR,SYSTEM_ADMIN_ALL,Denied,GeneralGroup
+ashwin.ramnarayanan@okta.com,U0001,2024-12-12T23:05:51Z,LOGOUT,Auditor,GENERAL_USER,Denied,GeneralGroup
+user34@atko.email,U0042,2025-10-20T23:05:51Z,READ,Viewer,FIN_PROCESS_APPR,Permitted,GeneralGroup
+user20@atko.email,U0028,2025-02-14T23:05:51Z,CREATE NEW VENDOR,Auditor,SALES_VIEW,Permitted,GeneralGroup
+user18@atko.email,U0026,2025-03-03T23:05:51Z,LOGOUT,IT_Ops,SYSTEM_ADMIN_ALL,Denied,GeneralGroup
+user39@atko.email,U0047,2025-08-15T23:05:51Z,CHECK_PERMS,IT_Ops,SALES_VIEW,Denied,GeneralGroup
+user41@atko.email,U0049,2025-02-14T23:05:51Z,LOGOUT,Security,SYSTEM_ADMIN_ALL,Denied,GeneralGroup
+samantha.driver@atko.email,U0004,2025-10-03T23:05:51Z,APPROVE,IT_Ops,HR_VIEW,Denied,GeneralGroup
+user18@atko.email,U0026,2025-03-23T23:05:51Z,READ,Admin,FINANCE_EDIT,Permitted,SysAdmin
+user44@atko.email,U0052,2025-11-11T23:05:51Z,READ,IT_Ops,SECURITY_EXECUTE,Permitted,SysAdmin
+user31@atko.email,U0039,2025-11-27T23:05:51Z,READ,Employee,FIN_VENDOR_CREATOR,Denied,SysAdmin
+user45@atko.email,U0053,2025-01-30T23:05:51Z,READ,Employee,FIN_PROCESS_APPR,Denied,SysAdmin
+user6@atko.email,U0014,2025-01-19T23:05:51Z,READ,HR,FINANCE_EDIT,Permitted,SysAdmin
+user0@atko.email,U0008,2025-04-28T23:05:51Z,READ,Payment Processor,AUDIT_READ,Denied,SysAdmin
+user17@atko.email,U0025,2025-09-22T23:05:51Z,READ,Finance,SALES_VIEW,Denied,SysAdmin
+user42@atko.email,U0050,2025-08-24T23:05:51Z,READ,Finance,FIN_PROCESS_APPR,Denied,SysAdmin
+user16@atko.email,U0024,2025-05-02T23:05:51Z,READ,Finance,SECURITY_EXECUTE,Denied,SysAdmin
+ivan@atko.email,U0006,2025-03-24T23:05:51Z,READ,Auditor,AUDIT_READ,Denied,SysAdmin

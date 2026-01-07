@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2026 ashwinramn
+Copyright (c) 2024 Ashwin Ramnarayanan
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -19,3 +19,19 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+DISCLAIMER
+
+This project is an independent, experimental implementation created for 
+educational and demonstration purposes. It is NOT an official Okta product 
+and is not supported by Okta, Inc.
+
+Use of this software is at your own risk. The author and contributors are 
+not responsible for any issues, data loss, or security incidents that may 
+arise from using this software in any environment.
+
+This project uses Okta's public APIs, which are subject to Okta's terms of 
+service and may change without notice. Always refer to official Okta 
+documentation for production implementations.

@@ -1,0 +1,11 @@
+Email,User_ID,Access_Date,Action_Type,Role,Permission_Set,Effective_Access
+alice.johnson@acme.example.com,U001,2025-01-15T09:30:00Z,LOGIN,Admin,SYSTEM_ADMIN,Permitted
+bob.smith@acme.example.com,U002,2025-01-15T10:15:00Z,READ,Viewer,READ_ONLY,Permitted
+carol.williams@acme.example.com,U003,2025-01-15T11:00:00Z,UPDATE,Editor,CONTENT_EDIT,Permitted
+david.brown@acme.example.com,U004,2025-01-15T14:30:00Z,DELETE,Admin,SYSTEM_ADMIN,Permitted
+emma.davis@acme.example.com,U005,2025-01-16T08:45:00Z,LOGIN,Viewer,READ_ONLY,Permitted
+frank.miller@acme.example.com,U006,2025-01-16T09:00:00Z,CREATE,Editor,CONTENT_EDIT,Permitted
+grace.wilson@acme.example.com,U007,2025-01-16T10:30:00Z,APPROVE,Manager,APPROVE_ACCESS,Permitted
+henry.moore@acme.example.com,U008,2025-01-16T11:15:00Z,READ,Viewer,READ_ONLY,Permitted
+iris.taylor@acme.example.com,U009,2025-01-16T13:00:00Z,UPDATE,Editor,CONTENT_EDIT,Permitted
+jack.anderson@acme.example.com,U010,2025-01-16T14:45:00Z,LOGIN,Manager,APPROVE_ACCESS,Permitted

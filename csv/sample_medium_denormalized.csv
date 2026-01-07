@@ -1,0 +1,46 @@
+Email,User_ID,Access_Date,Action_Type,Role,Permission_Set,Effective_Access
+alice.johnson@acme.example.com,U001,2025-01-10T09:00:00Z,LOGIN,Admin,SYSTEM_ADMIN,Permitted
+alice.johnson@acme.example.com,U001,2025-01-12T14:30:00Z,DELETE,Admin,DATA_DELETE,Permitted
+alice.johnson@acme.example.com,U001,2025-01-15T11:00:00Z,APPROVE,Admin; Manager,APPROVE_ACCESS,Permitted
+bob.smith@acme.example.com,U002,2025-01-10T10:00:00Z,READ,Viewer,READ_ONLY,Permitted
+bob.smith@acme.example.com,U002,2025-01-11T09:30:00Z,READ,Viewer,REPORT_VIEW,Permitted
+bob.smith@acme.example.com,U002,2025-01-14T16:00:00Z,UPDATE,,CONTENT_EDIT,Denied
+carol.williams@acme.example.com,U003,2025-01-10T08:45:00Z,LOGIN,Editor,CONTENT_EDIT,Permitted
+carol.williams@acme.example.com,U003,2025-01-11T10:15:00Z,CREATE,Editor,CONTENT_CREATE,Permitted
+carol.williams@acme.example.com,U003,2025-01-13T14:00:00Z,DELETE,Editor,DATA_DELETE,Denied
+david.brown@acme.example.com,U004,2025-01-10T07:30:00Z,LOGIN,Finance,FINANCE_VIEW,Permitted
+david.brown@acme.example.com,U004,2025-01-11T11:00:00Z,APPROVE,Finance,PAYMENT_APPROVE,Permitted
+david.brown@acme.example.com,U004,2025-01-12T15:30:00Z,CREATE,Finance; Auditor,VENDOR_CREATE,Permitted
+emma.davis@acme.example.com,U005,2025-01-10T09:15:00Z,READ,HR,HR_VIEW,Permitted
+emma.davis@acme.example.com,U005,2025-01-12T10:00:00Z,UPDATE,HR,EMPLOYEE_EDIT,Permitted
+emma.davis@acme.example.com,U005,2025-01-14T13:45:00Z,DELETE,HR,EMPLOYEE_EDIT,Denied
+frank.miller@acme.example.com,U006,2025-01-11T08:00:00Z,LOGIN,IT_Ops,SYSTEM_MAINTAIN,Permitted
+frank.miller@acme.example.com,U006,2025-01-12T09:30:00Z,EXECUTE,IT_Ops,DEPLOY_ACCESS,Permitted
+frank.miller@acme.example.com,U006,2025-01-15T16:00:00Z,DELETE,IT_Ops; Security,SYSTEM_ADMIN,Denied
+grace.wilson@acme.example.com,U007,2025-01-10T10:30:00Z,LOGIN,Manager,APPROVE_ACCESS,Permitted
+grace.wilson@acme.example.com,U007,2025-01-13T11:15:00Z,APPROVE,Manager,BUDGET_APPROVE,Permitted
+grace.wilson@acme.example.com,U007,2025-01-14T14:00:00Z,READ,Manager; Viewer,REPORT_VIEW,Permitted
+henry.moore@acme.example.com,U008,2025-01-11T07:45:00Z,LOGIN,Security,SECURITY_AUDIT,Permitted
+henry.moore@acme.example.com,U008,2025-01-12T10:00:00Z,READ,Security,LOG_VIEW,Permitted
+henry.moore@acme.example.com,U008,2025-01-15T09:00:00Z,EXECUTE,Security,SECURITY_SCAN,Permitted
+iris.taylor@acme.example.com,U009,2025-01-10T11:00:00Z,READ,Auditor,AUDIT_READ,Permitted
+iris.taylor@acme.example.com,U009,2025-01-13T15:00:00Z,CREATE,Auditor,AUDIT_REPORT,Permitted
+iris.taylor@acme.example.com,U009,2025-01-15T10:30:00Z,READ,Auditor; Compliance,COMPLIANCE_VIEW,Permitted
+jack.anderson@acme.example.com,U010,2025-01-11T09:00:00Z,LOGIN,Sales,SALES_VIEW,Permitted
+jack.anderson@acme.example.com,U010,2025-01-12T14:00:00Z,UPDATE,Sales,CUSTOMER_EDIT,Permitted
+jack.anderson@acme.example.com,U010,2025-01-14T11:30:00Z,CREATE,Sales,DEAL_CREATE,Permitted
+kate.lee@acme.example.com,U011,2025-01-10T08:30:00Z,LOGIN,Support,TICKET_VIEW,Permitted
+kate.lee@acme.example.com,U011,2025-01-11T13:00:00Z,UPDATE,Support,TICKET_RESOLVE,Permitted
+kate.lee@acme.example.com,U011,2025-01-13T16:30:00Z,READ,Support; Viewer,KB_VIEW,Permitted
+leo.garcia@acme.example.com,U012,2025-01-12T07:00:00Z,LOGIN,Developer,CODE_READ,Permitted
+leo.garcia@acme.example.com,U012,2025-01-13T10:00:00Z,CREATE,Developer,CODE_DEPLOY,Permitted
+leo.garcia@acme.example.com,U012,2025-01-15T14:15:00Z,DELETE,Developer,CODE_DELETE,Denied
+mia.martinez@acme.example.com,U013,2025-01-10T12:00:00Z,READ,Contractor,READ_ONLY,Permitted
+mia.martinez@acme.example.com,U013,2025-01-14T09:45:00Z,UPDATE,,CONTENT_EDIT,Denied
+mia.martinez@acme.example.com,U013,2025-01-15T11:30:00Z,LOGIN,Contractor,PROJECT_VIEW,Permitted
+noah.robinson@acme.example.com,U014,2025-01-11T10:30:00Z,LOGIN,Executive,EXEC_DASHBOARD,Permitted
+noah.robinson@acme.example.com,U014,2025-01-13T09:00:00Z,READ,Executive,FINANCE_VIEW,Permitted
+noah.robinson@acme.example.com,U014,2025-01-14T15:00:00Z,APPROVE,Executive; Manager,BUDGET_APPROVE,Permitted
+olivia.clark@acme.example.com,U015,2025-01-10T13:00:00Z,LOGIN,Intern,READ_ONLY,Permitted
+olivia.clark@acme.example.com,U015,2025-01-12T11:00:00Z,READ,Intern,TRAINING_VIEW,Permitted
+olivia.clark@acme.example.com,U015,2025-01-15T08:30:00Z,UPDATE,,CONTENT_EDIT,Denied

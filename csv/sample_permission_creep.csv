@@ -1,0 +1,21 @@
+Email,User_ID,Access_Date,Action_Type,Role,Permission_Set,Effective_Access
+alice.johnson@acme.example.com,U001,2024-06-15T09:00:00Z,LOGIN,Intern,READ_ONLY,Permitted
+alice.johnson@acme.example.com,U001,2024-09-01T09:00:00Z,UPDATE,Junior_Dev,CODE_READ,Permitted
+alice.johnson@acme.example.com,U001,2025-01-10T09:00:00Z,DELETE,Senior_Dev; Team_Lead,CODE_DEPLOY,Permitted
+alice.johnson@acme.example.com,U001,2025-01-10T10:00:00Z,EXECUTE,Senior_Dev; Team_Lead,SYSTEM_ADMIN,Denied
+bob.smith@acme.example.com,U002,2024-03-01T08:00:00Z,LOGIN,Sales_Rep,SALES_VIEW,Permitted
+bob.smith@acme.example.com,U002,2024-08-15T10:00:00Z,UPDATE,Sales_Rep; Account_Mgr,CUSTOMER_EDIT,Permitted
+bob.smith@acme.example.com,U002,2025-01-05T14:00:00Z,APPROVE,Account_Mgr,DEAL_APPROVE,Permitted
+bob.smith@acme.example.com,U002,2025-01-10T11:00:00Z,DELETE,Account_Mgr,FINANCE_VIEW,Denied
+carol.williams@acme.example.com,U003,2023-11-01T09:00:00Z,LOGIN,Finance_Analyst,FINANCE_VIEW,Permitted
+carol.williams@acme.example.com,U003,2024-04-01T09:00:00Z,APPROVE,Finance_Analyst; Budget_Owner,PAYMENT_APPROVE,Permitted
+carol.williams@acme.example.com,U003,2024-10-01T09:00:00Z,CREATE,Budget_Owner; Finance_Manager,VENDOR_CREATE,Permitted
+carol.williams@acme.example.com,U003,2025-01-08T15:00:00Z,DELETE,Finance_Manager,SYSTEM_ADMIN,Denied
+david.brown@acme.example.com,U004,2024-01-15T08:30:00Z,LOGIN,Contractor,PROJECT_VIEW,Permitted
+david.brown@acme.example.com,U004,2024-07-01T10:00:00Z,UPDATE,Contractor; Consultant,CONTENT_EDIT,Permitted
+david.brown@acme.example.com,U004,2025-01-03T09:00:00Z,READ,Consultant,CLIENT_DATA,Permitted
+david.brown@acme.example.com,U004,2025-01-10T16:00:00Z,DELETE,Consultant,DATA_DELETE,Denied
+emma.davis@acme.example.com,U005,2024-02-01T07:45:00Z,LOGIN,Support_Agent,TICKET_VIEW,Permitted
+emma.davis@acme.example.com,U005,2024-06-15T09:30:00Z,UPDATE,Support_Agent; Support_Lead,TICKET_RESOLVE,Permitted
+emma.davis@acme.example.com,U005,2024-11-01T11:00:00Z,APPROVE,Support_Lead; Support_Manager,REFUND_APPROVE,Permitted
+emma.davis@acme.example.com,U005,2025-01-10T13:00:00Z,EXECUTE,Support_Manager,BILLING_ACCESS,Denied
