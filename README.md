@@ -6,7 +6,53 @@
 
 > ⚠️ **Disclaimer**: This is an experimental project created with AI assistance ("vibecoded"). It is **NOT** an official Okta product. Use at your own risk. See [LICENSE](LICENSE) for details.
 
-A **Model Context Protocol (MCP)** server that enables natural language management of Okta Identity Governance entitlements. Process CSV files to bulk-create entitlements and assign grants to users—all through conversational AI.
+## Transform Identity Governance with Conversational AI
+
+Stop wrestling with CSV files, complex API payloads, and manual entitlement management. Just **talk to your identity system**.
+
+### The Old Way 😫
+```bash
+# Parse CSV manually, validate data format
+# Write Python scripts to call multiple APIs
+# Handle rate limits, retries, and error cases
+# Aggregate denormalized user data across rows
+# Construct complex JSON payloads for Okta Governance API
+# Manually track which users succeeded or failed
+# Debug cryptic API errors at 2 AM
+⏱️  Hours of work. Hundreds of lines of code. Endless frustration.
+```
+
+### The New Way ✨
+```
+You: "Analyze the audit CSV and show me what entitlements we need to create"
+Claude: [Shows complete structure with all roles and permissions]
+
+You: "Create those entitlements in app 0oaABC123"
+Claude: ✅ Created 15 entitlements with 47 unique values
+
+You: "Now grant the users their access"
+Claude: ✅ Processed 1,247 users in 8.3 seconds. All grants created successfully.
+```
+
+**That's the power of this MCP server.** Natural language commands. Automatic orchestration. Intelligent error handling. Zero manual API wrangling.
+
+### What This Does
+
+This **Model Context Protocol (MCP)** server bridges Claude AI and Okta Identity Governance, letting you:
+
+🎯 **Process complex CSV files** with denormalized data, multi-value entitlements, and thousands of rows  
+🚀 **Bulk-create entitlements** with automatic schema detection and intelligent structure creation  
+⚡ **Grant access at scale** with concurrent API calls, smart rate limiting, and comprehensive error recovery  
+🧠 **Use natural language** instead of memorizing API endpoints, payload structures, or error codes  
+🔍 **Get instant visibility** into what's happening with detailed progress tracking and clear summaries  
+
+### Real-World Impact
+
+**Before:** Your Identity Governance team spends 4 hours processing quarterly access reviews, manually creating entitlements and grants from CSV exports.
+
+**After:** *"Create entitlements from the Q1 audit file and grant all permitted access"* → Done in 3 minutes while you grab coffee ☕
+
+This isn't just automation—it's **conversational infrastructure**. The future of identity management is here.
 
 ---
 
