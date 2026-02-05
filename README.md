@@ -17,21 +17,21 @@
 
 ---
 
-## 🤔 The Problem
+## 🤔 The Opportunity
 
-Setting up **Okta Identity Governance (IGA)** is powerful but tedious:
+**Okta Identity Governance (IGA)** gives you powerful tools to manage entitlements, grants, and access bundles. This MCP server helps you get value from those features faster by automating the setup work:
 
-| Task | Manual Effort |
-|------|---------------|
-| **Importing entitlements** | Export CSV from legacy system → manually create each entitlement type → create each value → assign users one by one |
-| **Creating bundles** | Analyze who has what access → identify patterns → manually define bundles → hope you got the logic right |
-| **Bulk operations** | Click, click, click... hundreds of times |
+| Instead of... | You can say... |
+|---------------|----------------|
+| Manually creating entitlements from a CSV export | *"Import the HR system access from that CSV"* |
+| Analyzing access patterns to define bundles | *"Find patterns and suggest bundles"* |
+| Granting access to users one by one | *"Grant these permissions to all 500 users"* |
 
-**The reality:** Most IGA implementations stall because the data entry work is overwhelming. Teams export a CSV and then spend weeks clicking through the admin console.
+**The goal:** Spend less time on data entry, more time on governance strategy.
 
-## 💡 The Solution
+## 💡 How It Works
 
-This MCP server lets you **describe what you want in plain English**, and the AI handles the Okta API complexity:
+This MCP server lets you **describe what you want in plain English**, and the AI handles the Okta API calls:
 
 ```
 You: "Import the HR system access from that CSV into Okta"
@@ -68,25 +68,23 @@ AI:  Found 12 patterns:
 **Use case:** You have a CSV export from a legacy system and need to get it into Okta IGA
 
 ```
-┌─────────────────┐    ┌─────────────────────────┐    ┌──────────────────────────┐    ┌─────────────────────┐
-│ list_csv_files  │ → │ analyze_csv_for_        │ → │ prepare_entitlement_     │ → │ execute_user_grants │
-│                 │    │ entitlements            │    │ structure                │    │                     │
-└─────────────────┘    └─────────────────────────┘    └──────────────────────────┘    └─────────────────────┘
-   See available          Parse & validate            Create entitlements            Assign users &
-   CSV files              the data                    in Okta app                    grant access
+list_csv_files  →  analyze_csv_for_entitlements  →  prepare_entitlement_structure  →  execute_user_grants
+      │                      │                               │                              │
+      ▼                      ▼                               ▼                              ▼
+ See available         Parse & validate              Create entitlements            Assign users &
+  CSV files               the data                    in Okta app                   grant access
 ```
 
 ### Workflow 2: Pattern Mining → Bundles
 **Use case:** You have existing access in Okta and want to create bundles for access requests
 
 ```
-┌──────────────────────────┐    ┌─────────────────────────┐    ┌────────────────────────────┐
-│ analyze_entitlement_     │ → │ preview_bundle_         │ → │ create_bundle_from_pattern │
-│ patterns                 │    │ creation                │    │                            │
-└──────────────────────────┘    └─────────────────────────┘    └────────────────────────────┘
-   Discover correlations         See what would be             Create the bundle
-   between profiles &            created (dry run)             in Okta IGA
-   entitlements
+analyze_entitlement_patterns  →  preview_bundle_creation  →  create_bundle_from_pattern
+            │                             │                            │
+            ▼                             ▼                            ▼
+    Discover correlations          See what would be           Create the bundle
+    between profiles &             created (dry run)            in Okta IGA
+      entitlements
 ```
 
 ---
