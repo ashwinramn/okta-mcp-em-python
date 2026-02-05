@@ -89,12 +89,25 @@ async def analyze_csv_for_entitlements(args: Dict[str, Any]) -> str:
     try:
         df = pd.read_csv(filepath, dtype=str).fillna("")
         
+        # Columns to IGNORE (not treat as entitlements)
+        # These are identity columns, profile attributes, and metadata
         IGNORED_COLUMNS = {
-            "User_Email", "Email", "User", "Username", "Login", "Person_Id", 
-            "Employee_Number", "User_ID", "First Name", "Last Name", "Full Name",
-            "Department", "Manager", "Title", "Cost Center", "Division",
+            # Identity columns (used to find users in Okta)
+            "User_Email", "Email", "email", "User", "Username", "Login", 
+            "user.login", "Person_Id", "Employee_Number", "User_ID", "employee_id",
+            "okta_id", "samaccountname", "upn", "user_principal_name",
+            # Profile columns (user metadata)
+            "firstName", "First Name", "first_name", "First_Name",
+            "lastName", "Last Name", "last_name", "Last_Name",
+            "Full Name", "full_name", "fullName", "displayName", "Display_Name",
+            "Manager", "manager_email", "Manager_Email", "manager_name",
+            "Title", "Job_Title", "job_title", "Position",
+            "phone", "Phone", "mobile", "Mobile", "telephone",
+            "Department", "department", "Dept", "dept",
+            # Metadata columns
             "Effective_Access", "Last_Login", "Date", "Created_Date", 
-            "Updated_Date", "Status", "Active", "Access_Date", "Action_Type", "Action_Date"
+            "Updated_Date", "Status", "Active", "Access_Date", 
+            "Action_Type", "Action_Date", "Timestamp", "Modified_Date"
         }
         
         ignored_lower = {k.lower() for k in IGNORED_COLUMNS}
@@ -102,12 +115,25 @@ async def analyze_csv_for_entitlements(args: Dict[str, Any]) -> str:
         attr_cols = [c for c in df.columns if c in IGNORED_COLUMNS or c.lower() in ignored_lower]
         ent_cols = [c for c in df.columns if c not in attr_cols]
         
-        email_col = next((c for c in ["User_Email", "Email", "User"] if c in df.columns), None)
+        # Look for email column - prioritize columns with actual email addresses
+        # Priority: columns named "email" > columns containing @ symbols > other candidates
+        email_col = None
+        # First priority: exact "email" column name
+        if "email" in df.columns:
+            email_col = "email"
+        elif "Email" in df.columns:
+            email_col = "Email"
+        elif "User_Email" in df.columns:
+            email_col = "User_Email"
+        else:
+            # Fallback to other candidates
+            email_candidates = ["User", "Username", "Login", "user.login"]
+            email_col = next((c for c in df.columns if c in email_candidates or c.lower() in [e.lower() for e in email_candidates]), None)
         
         issues = []
         
         if not email_col:
-            issues.append("❌ CRITICAL: No email column found (User_Email, Email, or User)")
+            issues.append("❌ CRITICAL: No email column found (User_Email, Email, User, Username, or Login)")
         else:
             missing_emails = df[df[email_col] == ""].index.tolist()
             if missing_emails:
@@ -127,16 +153,30 @@ async def analyze_csv_for_entitlements(args: Dict[str, Any]) -> str:
             permitted_rows = total_rows
         
         entitlements = {}
+        entitlement_details = {}  # Enhanced details with multiValue detection
+        
         for col in ent_cols:
             unique_vals = set()
+            has_multi_value = False  # Track if any row has comma-separated values
+            
             for v in permitted_df[col].unique():
                 if not v: 
                     continue
-                for item in v.split(','):
+                # Check if this value contains commas (multi-value indicator)
+                items = v.split(',')
+                if len(items) > 1:
+                    has_multi_value = True
+                for item in items:
                     if item.strip():
                         unique_vals.add(item.strip())
             
             entitlements[col] = sorted(list(unique_vals))
+            entitlement_details[col] = {
+                "values": sorted(list(unique_vals)),
+                "value_count": len(unique_vals),
+                "multiValue": has_multi_value,
+                "multiValue_reason": "Detected comma-separated values in CSV" if has_multi_value else "Single value per user per row"
+            }
             
             if not unique_vals:
                 issues.append(f"⚠️ Column '{col}' has no values for permitted users")
@@ -147,6 +187,34 @@ async def analyze_csv_for_entitlements(args: Dict[str, Any]) -> str:
                 permitted_df[email_col].str.strip().unique()
             ) - {""}))
         
+        # Build sample user previews (2-3 users showing what they'll look like in Okta)
+        sample_user_previews = []
+        sample_rows = permitted_df.head(3).to_dict('records')
+        for row in sample_rows:
+            user_email = row.get(email_col, "").strip()
+            if not user_email:
+                continue
+            
+            user_entitlements = {}
+            for ent_col in ent_cols:
+                val = row.get(ent_col, "").strip()
+                if val:
+                    # Parse comma-separated values
+                    parsed_values = [v.strip() for v in val.split(',') if v.strip()]
+                    user_entitlements[ent_col] = {
+                        "values": parsed_values,
+                        "multiValue": len(parsed_values) > 1
+                    }
+            
+            sample_user_previews.append({
+                "email": user_email,
+                "okta_preview": {
+                    "user": f"<Okta User ID for {user_email}>",
+                    "app_assignment": "User will be assigned to application",
+                    "entitlements_granted": user_entitlements
+                }
+            })
+        
         cache_data = {
             "filepath": str(filepath),
             "filename": filepath.name,
@@ -154,10 +222,12 @@ async def analyze_csv_for_entitlements(args: Dict[str, Any]) -> str:
             "entitlement_columns": ent_cols,
             "attribute_columns": attr_cols,
             "entitlements": entitlements,
+            "entitlement_details": entitlement_details,
             "unique_users": unique_users,
             "total_rows": total_rows,
             "permitted_rows": permitted_rows,
-            "has_effective_access": "Effective_Access" in df.columns
+            "has_effective_access": "Effective_Access" in df.columns,
+            "sample_user_previews": sample_user_previews
         }
         set_cached_csv(filepath.name, cache_data)
         
@@ -165,39 +235,72 @@ async def analyze_csv_for_entitlements(args: Dict[str, Any]) -> str:
         for col, vals in entitlements.items():
             ent_summary.append(f"  • {col}: {', '.join(vals[:10])}{'...' if len(vals) > 10 else ''} ({len(vals)} values)")
         
-        return json.dumps({
-            "status": "analysis_complete",
-            "csv_name": filepath.name,
-            "summary": {
-                "total_rows": total_rows,
-                "permitted_rows": permitted_rows,
-                "unique_users": len(unique_users),
-                "entitlement_types": len(ent_cols),
-                "total_entitlement_values": sum(len(v) for v in entitlements.values())
-            },
-            "entitlements_found": entitlements,
-            "entitlement_columns": ent_cols,
-            "application_attributes": attr_cols,
-            "issues": issues if issues else ["✅ No issues detected"],
-            "cached": True,
-            "next_step": "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                        "📋 WORKFLOW STEP 1 COMPLETE - CSV Analyzed\n"
-                        "\n"
-                        "🔜 NEXT REQUIRED STEP:\n"
-                        "   Once you have the App ID, call:\n"
-                        "   prepare_entitlement_structure(filename, appId)\n"
-                        "\n"
-                        "   This will CREATE the entitlement structure in Okta.\n"
-                        "   DO NOT skip to execute_user_grants - it will fail!\n"
-                        "\n"
-                        "⚠️  Please provide the Okta App ID to continue.\n"
-                        "   Example: 'The App ID is 0oa1234567890ABCDEF'\n"
-                        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        }, indent=2)
+        # Build human-readable output
+        output_lines = [
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            "📊 STAGE 1 COMPLETE: CSV Analysis",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            "",
+            f"📁 File: {filepath.name}",
+            f"   Total rows: {total_rows}",
+            f"   Permitted rows: {permitted_rows}",
+            f"   Unique users: {len(unique_users)}",
+            "",
+            "📋 ENTITLEMENTS TO CREATE:",
+            "─────────────────────────────────────────────────────────────────────────────────"
+        ]
+        
+        for ent_name, details in entitlement_details.items():
+            multi_indicator = "✅ MULTI-VALUE" if details["multiValue"] else "◻️  Single-value"
+            output_lines.append(f"")
+            output_lines.append(f"   🏷️  {ent_name}")
+            output_lines.append(f"       Type: {multi_indicator}")
+            output_lines.append(f"       Reason: {details['multiValue_reason']}")
+            output_lines.append(f"       Values ({details['value_count']}): {', '.join(details['values'][:8])}{'...' if details['value_count'] > 8 else ''}")
+        
+        output_lines.append("")
+        output_lines.append("─────────────────────────────────────────────────────────────────────────────────")
+        output_lines.append("")
+        output_lines.append("👥 SAMPLE USER PREVIEWS (What they'll look like in Okta):")
+        output_lines.append("─────────────────────────────────────────────────────────────────────────────────")
+        
+        for i, preview in enumerate(sample_user_previews[:3], 1):
+            user_email = preview.get("email", "")
+            user_ents = preview.get("okta_preview", {}).get("entitlements_granted", {})
+            output_lines.append(f"")
+            output_lines.append(f"   👤 User {i}: {user_email}")
+            for ent_name, ent_data in user_ents.items():
+                vals = ent_data.get("values", [])
+                multi = "🔹" if ent_data.get("multiValue") else "▪️"
+                output_lines.append(f"       {multi} {ent_name}: {', '.join(vals)}")
+        
+        if issues and issues != ["✅ No issues detected"]:
+            output_lines.append("")
+            output_lines.append("⚠️  DATA ISSUES:")
+            for issue in issues:
+                output_lines.append(f"   {issue}")
+        
+        output_lines.extend([
+            "",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            "🔜 NEXT STEP: Provide the Okta App ID",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            "",
+            "   Once you have the App ID, I will call:",
+            "   prepare_entitlement_structure(filename, appId)",
+            "",
+            "   This will CREATE the entitlement structure in Okta.",
+            "",
+            "   💡 Example: 'The App ID is 0oa1234567890ABCDEF'",
+            "",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        ])
+        
+        return "\n".join(output_lines)
 
     except Exception as e:
         logger.error(f"CSV analysis failed: {e}", exc_info=True)
-        return json.dumps({"status": "FAILED", "error": f"Error analyzing CSV: {str(e)}"})
+        return f"❌ FAILED: Error analyzing CSV: {str(e)}"
 
 
 # ============================================
@@ -282,6 +385,9 @@ async def prepare_entitlement_structure(args: Dict[str, Any]) -> str:
         })
     
     csv_entitlements = cached.get("entitlements", {})
+    entitlement_details = cached.get("entitlement_details", {})
+    sample_user_previews = cached.get("sample_user_previews", [])
+    
     if not csv_entitlements:
         return json.dumps({"status": "FAILED", "error": "No entitlements found in cached CSV data"})
     
@@ -321,7 +427,7 @@ async def prepare_entitlement_structure(args: Dict[str, Any]) -> str:
                     "error": f"Failed to ensure app schema attributes: {schema_msg}"
                 })
             
-            return await _create_entitlement_structure(app_id, csv_entitlements, mode="create")
+            return await _create_entitlement_structure(app_id, csv_entitlements, entitlement_details, sample_user_previews, mode="create")
         
         else:
             csv_ent_names = set(csv_entitlements.keys())
@@ -332,54 +438,86 @@ async def prepare_entitlement_structure(args: Dict[str, Any]) -> str:
             only_in_app = app_ent_names - csv_ent_names
             
             if mode == "auto":
-                return json.dumps({
-                    "status": "EXISTING_ENTITLEMENTS_FOUND",
-                    "message": "⚠️ The application already has entitlements configured.",
-                    "comparison": {
-                        "in_app": list(app_ent_names),
-                        "in_csv": list(csv_ent_names),
-                        "matching": list(common),
-                        "new_in_csv": list(new_in_csv),
-                        "only_in_app": list(only_in_app)
-                    },
-                    "existing_entitlements": [
-                        {"name": e.get("name"), "id": e.get("id"), "description": e.get("description", "")}
-                        for e in existing_ents
-                    ],
-                    "options": {
-                        "update": "Add new entitlements from CSV, keep existing ones",
-                        "replace": "Delete all existing entitlements and recreate from CSV"
-                    },
-                    "next_step": "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                                "🔄 What would you like to do?\n"
-                                "   • 'Update' - Add new entitlements, keep existing\n"
-                                "   • 'Replace' - Delete all and recreate from CSV\n"
-                                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                }, indent=2)
+                # Build human-readable output for existing entitlements
+                output_lines = [
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                    "⚠️  EXISTING ENTITLEMENTS FOUND",
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                    "",
+                    f"📱 App ID: {app_id}",
+                    "",
+                    "📋 EXISTING ENTITLEMENTS IN APP:",
+                    "─────────────────────────────────────────────────────────────────────────────────"
+                ]
+                
+                for ent in existing_ents:
+                    output_lines.append(f"   🏷️  {ent.get('name')} (ID: {ent.get('id')})")
+                
+                output_lines.append("")
+                output_lines.append("📋 ENTITLEMENTS IN CSV:")
+                output_lines.append("─────────────────────────────────────────────────────────────────────────────────")
+                for name in csv_ent_names:
+                    output_lines.append(f"   🏷️  {name}")
+                
+                output_lines.append("")
+                output_lines.append("🔍 COMPARISON:")
+                output_lines.append("─────────────────────────────────────────────────────────────────────────────────")
+                if common:
+                    output_lines.append(f"   ✅ Matching: {', '.join(common)}")
+                if new_in_csv:
+                    output_lines.append(f"   🆕 New in CSV: {', '.join(new_in_csv)}")
+                if only_in_app:
+                    output_lines.append(f"   📱 Only in App: {', '.join(only_in_app)}")
+                
+                output_lines.extend([
+                    "",
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                    "🤔 WHAT WOULD YOU LIKE TO DO?",
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                    "",
+                    "   • 'Update' - Add new entitlements from CSV, keep existing ones",
+                    "   • 'Replace' - Delete ALL existing entitlements and recreate from CSV",
+                    "",
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                ])
+                
+                return "\n".join(output_lines)
             
             elif mode == "update":
                 new_ents = {k: v for k, v in csv_entitlements.items() if k in new_in_csv}
+                new_ent_details = {k: v for k, v in entitlement_details.items() if k in new_in_csv}
                 if not new_ents:
-                    return json.dumps({
-                        "status": "NO_CHANGES_NEEDED",
-                        "message": "✅ All entitlements from CSV already exist in the app.",
-                        "existing_entitlements": list(app_ent_names),
-                        "next_step": "Ready to proceed with granting users their entitlements?"
-                    }, indent=2)
-                return await _create_entitlement_structure(app_id, new_ents, mode="update")
+                    return (
+                        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        "✅ NO CHANGES NEEDED\n"
+                        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        "\n"
+                        "All entitlements from CSV already exist in the app.\n"
+                        f"Existing entitlements: {', '.join(app_ent_names)}\n"
+                        "\n"
+                        "Ready to proceed with granting users their entitlements?\n"
+                        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    )
+                return await _create_entitlement_structure(app_id, new_ents, new_ent_details, sample_user_previews, mode="update")
             
             elif mode == "replace":
-                return await _replace_entitlement_structure(app_id, existing_ents, csv_entitlements)
+                return await _replace_entitlement_structure(app_id, existing_ents, csv_entitlements, entitlement_details, sample_user_previews)
             
             else:
-                return json.dumps({"status": "FAILED", "error": f"Unknown mode: {mode}"})
+                return f"❌ FAILED: Unknown mode: {mode}"
     
     except Exception as e:
         logger.error(f"Entitlement structure preparation failed: {e}", exc_info=True)
-        return json.dumps({"status": "FAILED", "error": str(e)})
+        return f"❌ FAILED: {str(e)}"
 
 
-async def _create_entitlement_structure(app_id: str, entitlements: Dict[str, List[str]], mode: str = "create") -> str:
+async def _create_entitlement_structure(
+    app_id: str, 
+    entitlements: Dict[str, List[str]], 
+    entitlement_details: Dict[str, Dict] = None,
+    sample_user_previews: List[Dict] = None,
+    mode: str = "create"
+) -> str:
     """Internal: Create entitlement definitions and values.
     
     CORRECT API STRUCTURE (learned from manual testing):
@@ -389,7 +527,7 @@ async def _create_entitlement_structure(app_id: str, entitlements: Dict[str, Lis
     - displayName: display name for the entitlement
     - description: generated description
     - externalValue: external identifier (usually same as name)
-    - multiValue: false (single-select entitlement)
+    - multiValue: true/false (based on CSV analysis)
     - name: internal name
     - parent: {"externalId": app_id, "type": "APPLICATION"}
     - values: array of value objects, each with:
@@ -400,10 +538,16 @@ async def _create_entitlement_structure(app_id: str, entitlements: Dict[str, Lis
     """
     created = []
     errors = []
+    entitlement_details = entitlement_details or {}
+    sample_user_previews = sample_user_previews or []
     
     for ent_name, values in entitlements.items():
         try:
             description = generate_entitlement_description(ent_name)
+            
+            # Get multiValue setting from entitlement_details (detected from CSV)
+            ent_detail = entitlement_details.get(ent_name, {})
+            is_multi_value = ent_detail.get("multiValue", False)
             
             # Build ALL values at once - each value needs name, displayName, externalValue, description
             values_payload = [
@@ -428,7 +572,7 @@ async def _create_entitlement_structure(app_id: str, entitlements: Dict[str, Lis
                 "displayName": ent_name,
                 "description": description,
                 "externalValue": ent_name,
-                "multiValue": False,  # Single-select entitlement
+                "multiValue": is_multi_value,  # Based on CSV analysis
                 "name": ent_name,
                 "parent": {
                     "externalId": app_id,  # Note: externalId, not id
@@ -437,7 +581,7 @@ async def _create_entitlement_structure(app_id: str, entitlements: Dict[str, Lis
                 "values": values_payload  # ALL values created in one API call
             }
             
-            logger.info(f"Creating entitlement: {ent_name} with {len(values)} values")
+            logger.info(f"Creating entitlement: {ent_name} with {len(values)} values (multiValue={is_multi_value})")
             logger.debug(f"Entitlement body: {json.dumps(body, indent=2)}")
             
             result = await okta_client.execute_request("POST", url, body=body)
@@ -446,13 +590,14 @@ async def _create_entitlement_structure(app_id: str, entitlements: Dict[str, Lis
                 response_data = result.get("response", {})
                 created.append({
                     "name": ent_name,
+                    "id": response_data.get("id"),
+                    "multiValue": is_multi_value,
                     "values": values,
                     "value_count": len(values),
                     "description": description,
-                    "id": response_data.get("id"),
                     "created_values": len(response_data.get("values", []))
                 })
-                logger.info(f"✅ Created entitlement '{ent_name}' with {len(values)} values")
+                logger.info(f"✅ Created entitlement '{ent_name}' with {len(values)} values (multiValue={is_multi_value})")
             else:
                 error_msg = result.get("response", {}).get("errorSummary", str(result.get("response")))
                 errors.append({"name": ent_name, "error": error_msg})
@@ -466,27 +611,81 @@ async def _create_entitlement_structure(app_id: str, entitlements: Dict[str, Lis
     
     status = "SUCCESS" if not errors else ("PARTIAL_SUCCESS" if created else "FAILED")
     
-    return json.dumps({
-        "status": status,
-        "mode": mode,
-        "message": f"✅ Created {len(created)} entitlement(s)" + (f", {len(errors)} failed" if errors else ""),
-        "created": created,
-        "errors": errors if errors else [],
-        "next_step": "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    "✅ WORKFLOW STEP 2 COMPLETE - Entitlement Structure Created\n"
-                    "\n"
-                    "🔜 NEXT REQUIRED STEP:\n"
-                    "   Call: execute_user_grants(filename, appId)\n"
-                    "\n"
-                    "   This will grant entitlements to users from the CSV.\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    }, indent=2)
+    # Build human-readable output
+    output_lines = [
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        f"{'✅' if status == 'SUCCESS' else '⚠️'} STAGE 2 COMPLETE: Entitlement Structure Created",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "",
+        f"📱 App ID: {app_id}",
+        f"   Mode: {mode}",
+        "",
+        "📋 ENTITLEMENTS CREATED IN OKTA:",
+        "─────────────────────────────────────────────────────────────────────────────────"
+    ]
+    
+    for ent in created:
+        multi_indicator = "✅ MULTI-VALUE" if ent["multiValue"] else "◻️  Single-value"
+        output_lines.append(f"")
+        output_lines.append(f"   🏷️  {ent['name']}")
+        output_lines.append(f"       Entitlement ID: {ent['id']}")
+        output_lines.append(f"       Type: {multi_indicator}")
+        output_lines.append(f"       Values ({ent['value_count']}): {', '.join(ent['values'][:8])}{'...' if ent['value_count'] > 8 else ''}")
+    
+    if errors:
+        output_lines.append("")
+        output_lines.append("❌ ERRORS:")
+        for err in errors:
+            output_lines.append(f"   • {err['name']}: {err['error']}")
+    
+    output_lines.append("")
+    output_lines.append("─────────────────────────────────────────────────────────────────────────────────")
+    output_lines.append("")
+    output_lines.append("👥 SAMPLE GRANTS PREVIEW (What will be created for each user):")
+    output_lines.append("─────────────────────────────────────────────────────────────────────────────────")
+    
+    for preview in sample_user_previews[:3]:
+        user_email = preview.get("email", "")
+        user_ents = preview.get("okta_preview", {}).get("entitlements_granted", {})
+        output_lines.append(f"")
+        output_lines.append(f"   👤 {user_email}")
+        for ent_name, ent_data in user_ents.items():
+            vals = ent_data.get("values", [])
+            # Find the entitlement ID
+            created_ent = next((c for c in created if c["name"] == ent_name), None)
+            ent_id = created_ent.get("id", "???") if created_ent else "???"
+            multi = "🔹" if ent_data.get("multiValue") else "▪️"
+            output_lines.append(f"       {multi} {ent_name} ({ent_id}): {', '.join(vals)}")
+    
+    output_lines.extend([
+        "",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "🔜 NEXT STEP: Grant entitlements to users",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "",
+        "   Ready to proceed? I will call:",
+        "   execute_user_grants(filename, appId)",
+        "",
+        "   This will grant the entitlements above to all users in the CSV.",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    ])
+    
+    return "\n".join(output_lines)
 
 
-async def _replace_entitlement_structure(app_id: str, existing_ents: List[Dict], csv_entitlements: Dict[str, List[str]]) -> str:
+async def _replace_entitlement_structure(
+    app_id: str, 
+    existing_ents: List[Dict], 
+    csv_entitlements: Dict[str, List[str]],
+    entitlement_details: Dict[str, Dict] = None,
+    sample_user_previews: List[Dict] = None
+) -> str:
     """Internal: Delete existing entitlements and recreate from CSV."""
     deleted = []
     delete_errors = []
+    entitlement_details = entitlement_details or {}
+    sample_user_previews = sample_user_previews or []
     
     for ent in existing_ents:
         ent_id = ent.get("id")
@@ -510,38 +709,119 @@ async def _replace_entitlement_structure(app_id: str, existing_ents: List[Dict],
     
     logger.info(f"Deleted {len(deleted)} entitlements, {len(delete_errors)} errors")
     
-    create_result_str = await _create_entitlement_structure(app_id, csv_entitlements, mode="replace")
-    create_result = json.loads(create_result_str)
+    create_result_str = await _create_entitlement_structure(app_id, csv_entitlements, entitlement_details, sample_user_previews, mode="replace")
     
-    return json.dumps({
-        "status": create_result.get("status"),
-        "mode": "replace",
-        "deleted": {
-            "count": len(deleted),
-            "names": deleted,
-            "errors": delete_errors
-        },
-        "created": create_result.get("created", []),
-        "errors": create_result.get("errors", []),
-        "next_step": create_result.get("next_step")
-    }, indent=2)
+    # Build human-readable output for replace mode
+    output_lines = [
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "🔄 STAGE 2 COMPLETE: Entitlements Replaced",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "",
+        f"🗑️  DELETED: {len(deleted)} existing entitlements",
+    ]
+    
+    if deleted:
+        output_lines.append(f"   • {', '.join(deleted)}")
+    
+    if delete_errors:
+        output_lines.append(f"   ❌ Errors: {len(delete_errors)}")
+        for err in delete_errors:
+            output_lines.append(f"      • {err['name']}: {err['error']}")
+    
+    output_lines.append("")
+    output_lines.append(create_result_str)
+    
+    return "\n".join(output_lines)
 
 
 # ============================================
 # STAGE 3: Execute User Grants
 # ============================================
 
+async def collect_app_entitlement_ids(app_id: str) -> Dict[str, Any]:
+    """
+    Collect all entitlement IDs and value IDs for an application upfront.
+    
+    Returns:
+        {
+            "success": True/False,
+            "ent_id_map": {entitlement_name: entitlement_schema_id},
+            "ent_value_map": {entitlement_name: {value_name: value_id}},
+            "entitlement_details": [{name, id, values: [{name, id}]}],
+            "error": "..." (if failed)
+        }
+    """
+    result = {
+        "success": False,
+        "ent_id_map": {},
+        "ent_value_map": {},
+        "entitlement_details": []
+    }
+    
+    # Step 1: Get all entitlements for the app
+    existing_ents_json = await api.okta_iga_list_entitlements({"appId": app_id})
+    success, existing_ents = safe_json_loads(existing_ents_json, "list_entitlements")
+    
+    if not success or not isinstance(existing_ents, list):
+        result["error"] = "Failed to retrieve entitlements from app"
+        return result
+    
+    if not existing_ents:
+        result["error"] = "No entitlements found in app. Please run prepare_entitlement_structure first."
+        return result
+    
+    # Build entitlement ID map
+    ent_id_map = {}
+    for e in existing_ents:
+        if isinstance(e, dict) and 'name' in e and 'id' in e:
+            ent_id_map[e['name']] = e['id']
+    
+    result["ent_id_map"] = ent_id_map
+    
+    # Step 2: Get all values for each entitlement
+    ent_value_map = {}
+    entitlement_details = []
+    
+    for ent_name, ent_id in ent_id_map.items():
+        values_json = await api.okta_iga_list_entitlement_values({"entitlementId": ent_id})
+        success, values_data = safe_json_loads(values_json, f"list_values_{ent_name}")
+        
+        if not success or not isinstance(values_data, list):
+            values_data = []
+        
+        # Build map of value name -> value ID
+        value_id_map = {}
+        value_details = []
+        for v in values_data:
+            if isinstance(v, dict) and 'name' in v and 'id' in v:
+                value_id_map[v['name']] = v['id']
+                value_details.append({"name": v['name'], "id": v['id']})
+        
+        ent_value_map[ent_name] = value_id_map
+        entitlement_details.append({
+            "name": ent_name,
+            "id": ent_id,
+            "values": value_details
+        })
+        
+        await asyncio.sleep(0.1)  # Small delay between API calls
+    
+    result["success"] = True
+    result["ent_value_map"] = ent_value_map
+    result["entitlement_details"] = entitlement_details
+    
+    return result
+
+
 async def execute_user_grants(args: Dict[str, Any]) -> str:
     """
     STAGE 3: Grant entitlements to users from CSV.
     
     WORKFLOW:
-    1. Retrieves entitlement IDs from the application
-    2. Retrieves entitlement value IDs for all entitlements
-    3. Searches for all unique users in Okta (concurrent)
-    4. Assigns found users to the application
-    5. Builds grant requests from CSV data (one grant per user with all entitlements)
-    6. Creates entitlement grants (concurrent, rate-limited)
+    1. Collects all entitlement IDs and value IDs upfront (from app)
+    2. Searches for all unique users in Okta (concurrent)
+    3. Assigns found users to the application (concurrent)
+    4. Builds and creates entitlement grants (concurrent, rate-limited)
     
     Returns detailed summary with assignment and grant statistics.
     """
@@ -570,49 +850,27 @@ async def execute_user_grants(args: Dict[str, Any]) -> str:
     start_time = time.time()
     
     try:
-        progress.append(f"[1/5] Retrieving entitlement IDs for app {app_id}")
+        # STEP 1: Collect all entitlement IDs upfront
+        progress.append(f"[1/4] Collecting entitlement IDs for app {app_id}")
         
-        existing_ents_json = await api.okta_iga_list_entitlements({"appId": app_id})
-        success, existing_ents = safe_json_loads(existing_ents_json, "list_entitlements")
+        ent_data = await collect_app_entitlement_ids(app_id)
         
-        if not success or not isinstance(existing_ents, list):
-            existing_ents = []
-        
-        ent_id_map = {e['name']: e['id'] for e in existing_ents if isinstance(e, dict) and 'name' in e and 'id' in e}
-        
-        if not ent_id_map:
+        if not ent_data["success"]:
             return json.dumps({
                 "status": "FAILED",
-                "error": "No entitlements found in app. Please run prepare_entitlement_structure first."
+                "error": ent_data.get("error", "Failed to collect entitlement IDs")
             })
         
+        ent_id_map = ent_data["ent_id_map"]
+        ent_value_map = ent_data["ent_value_map"]
+        entitlement_details = ent_data["entitlement_details"]
+        
         progress.append(f"   ✅ Found {len(ent_id_map)} entitlements: {list(ent_id_map.keys())}")
+        for ent in entitlement_details:
+            progress.append(f"      • {ent['name']}: {len(ent['values'])} values")
         
-        # NEW: Get entitlement value IDs for all entitlements
-        progress.append(f"[2/5] Retrieving entitlement value IDs")
-        
-        ent_value_map = {}  # {entitlement_name: {value_name: value_id}}
-        
-        for ent_name, ent_id in ent_id_map.items():
-            values_json = await api.okta_iga_list_entitlement_values({"entitlementId": ent_id})
-            success, values_data = safe_json_loads(values_json, f"list_values_{ent_name}")
-            
-            if not success or not isinstance(values_data, list):
-                values_data = []
-            
-            # Build map of value name -> value ID
-            value_id_map = {}
-            for v in values_data:
-                if isinstance(v, dict) and 'name' in v and 'id' in v:
-                    value_id_map[v['name']] = v['id']
-            
-            ent_value_map[ent_name] = value_id_map
-            
-            await asyncio.sleep(0.2)  # Small delay between API calls
-        
-        progress.append(f"   ✅ Retrieved value IDs for all entitlements")
-        
-        progress.append(f"[3/5] Searching for {len(unique_users)} users in Okta (concurrent)")
+        # STEP 2: Search for users in Okta
+        progress.append(f"[2/4] Searching for {len(unique_users)} users in Okta (concurrent)")
         
         search_inputs = [{"attribute": "email", "value": email} for email in unique_users]
         
@@ -641,15 +899,26 @@ async def execute_user_grants(args: Dict[str, Any]) -> str:
             progress.append(f"      Examples: {not_found_users[:5]}{'...' if len(not_found_users) > 5 else ''}")
         
         if not found_users:
-            return json.dumps({
-                "status": "FAILED",
-                "error": "No users found in Okta",
-                "not_found_users": not_found_users[:20],
-                "progress": progress
-            })
+            not_found_sample = not_found_users[:10]
+            return (
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "❌ NO USERS FOUND IN OKTA\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "\n"
+                f"All {len(not_found_users)} users in the CSV do not exist in your Okta tenant.\n"
+                "\n"
+                "Sample users not found:\n" +
+                "\n".join([f"   • {email}" for email in not_found_sample]) +
+                ("\n   ... and more" if len(not_found_users) > 10 else "") +
+                "\n\n"
+                "💡 HINT: Verify that users exist in Okta with matching email addresses,\n"
+                "   or create them first before running this workflow.\n"
+                "\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            )
         
-        # NEW STEP: Assign users to application first
-        progress.append(f"[4/5] Assigning {len(found_users)} users to application (concurrent)")
+        # STEP 3: Assign users to application
+        progress.append(f"[3/4] Assigning {len(found_users)} users to application (concurrent)")
         
         user_ids_to_assign = list(found_users.values())
         
@@ -680,7 +949,8 @@ async def execute_user_grants(args: Dict[str, Any]) -> str:
             for failure in assignment_failed[:5]:
                 logger.warning(f"Failed to assign user {failure.get('userId')}: {failure.get('error')}")
         
-        progress.append("[5/5] Building grant requests from CSV data")
+        # STEP 4: Build and execute grant requests
+        progress.append("[4/4] Building grant requests from CSV data")
         
         # Group grants by user to consolidate multiple entitlements per user
         user_grants = {}  # {user_id: {entitlement_id: [value_ids]}}
@@ -731,7 +1001,7 @@ async def execute_user_grants(args: Dict[str, Any]) -> str:
                             continue
                         
                         # Add to user's entitlements
-                        if ent_id not in user_grants[user_id]:
+                        if user_id not in user_grants:
                             user_grants[user_id] = {}
                         if ent_id not in user_grants[user_id]:
                             user_grants[user_id][ent_id] = []
@@ -751,6 +1021,7 @@ async def execute_user_grants(args: Dict[str, Any]) -> str:
             
             grant_body = {
                 "grantType": "CUSTOM",
+                "actor": "ADMIN",  # Who is creating the grant (ADMIN = administrative action)
                 "target": {
                     "externalId": app_id,  # Application ID
                     "type": "APPLICATION"
@@ -767,12 +1038,18 @@ async def execute_user_grants(args: Dict[str, Any]) -> str:
         progress.append(f"   ✅ Prepared {len(grant_inputs)} grants for {len(user_grants)} users (skipped: {len(skipped)})")
         
         if not grant_inputs:
-            return json.dumps({
-                "status": "NO_GRANTS",
-                "message": "No grants to create",
-                "skipped": skipped[:20],
-                "progress": progress
-            })
+            return (
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "⚠️  NO GRANTS TO CREATE\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "\n"
+                "No grants could be created. This usually means:\n"
+                "• Users in CSV don't exist in Okta\n"
+                "• Entitlement values in CSV don't match created entitlements\n"
+                "\n"
+                f"Skipped: {len(skipped)} rows\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            )
         
         progress.append(f"[6/6] Creating {len(grant_inputs)} grants (concurrent, rate-limited)")
         
@@ -791,6 +1068,7 @@ async def execute_user_grants(args: Dict[str, Any]) -> str:
         
         successful_grants = grant_result.get("successful", 0)
         failed_grants = grant_result.get("failed", [])
+        created_grants = grant_result.get("created", [])
         
         progress.append(f"   ✅ Successfully created: {successful_grants} grants")
         if failed_grants:
@@ -801,41 +1079,106 @@ async def execute_user_grants(args: Dict[str, Any]) -> str:
         
         await basic.move_to_processed({"filename": Path(filepath).name, "destination": "processed_and_assigned"})
         
-        return json.dumps({
-            "status": "SUCCESS",
-            "message": "🚀 Entitlement granting completed!",
-            "summary": {
-                "users_searched": len(unique_users),
-                "users_found": len(found_users),
-                "users_not_found": len(not_found_users),
-                "users_assigned": assigned_count,
-                "users_already_assigned": already_assigned,
-                "assignment_failures": len(assignment_failed),
-                "grants_attempted": len(grant_inputs),
-                "grants_successful": successful_grants,
-                "grants_failed": len(failed_grants),
-                "grants_skipped": len(skipped),
-                "elapsed_seconds": round(elapsed, 2)
-            },
-            "not_found_users": not_found_users[:20] if not_found_users else [],
-            "assignment_failures": assignment_failed[:10] if assignment_failed else [],
-            "failed_grants": failed_grants[:10] if failed_grants else [],
-            "progress": progress,
-            "rate_limits": {
-                "requests_last_minute": rate_status.get("requestsLastMinute", 0),
-                "total_requests": rate_status.get("stats", {}).get("totalRequests", 0),
-                "throttled": rate_status.get("stats", {}).get("throttledRequests", 0)
-            },
-            "file_status": f"Moved to processed_and_assigned/"
-        }, indent=2)
+        # Build sample user previews showing what was actually created in Okta
+        sample_users_in_okta = []
+        for grant_info in created_grants[:3]:  # Show first 3 successful grants
+            user_id = grant_info.get("userId")
+            grant_id = grant_info.get("grantId")
+            grant_status = grant_info.get("grantStatus")
+            entitlements_granted = grant_info.get("entitlements", [])
+            
+            # Find the email for this user
+            user_email = next((email for email, uid in found_users.items() if uid == user_id), user_id)
+            
+            sample_users_in_okta.append({
+                "user_email": user_email,
+                "okta_user_id": user_id,
+                "grant_id": grant_id,
+                "grant_status": grant_status,
+                "entitlements_in_okta": entitlements_granted
+            })
+        
+        # Build human-readable output
+        output_lines = [
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            "🚀 STAGE 3 COMPLETE: Entitlements Granted!",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            "",
+            "📊 SUMMARY:",
+            "─────────────────────────────────────────────────────────────────────────────────",
+            f"   👥 Users searched:      {len(unique_users)}",
+            f"   ✅ Users found:         {len(found_users)}",
+            f"   ❌ Users not found:     {len(not_found_users)}",
+            "",
+            f"   📱 Users assigned:      {assigned_count} (new) + {already_assigned} (already assigned)",
+            "",
+            f"   🎫 Grants created:      {successful_grants}",
+            f"   ❌ Grants failed:       {len(failed_grants)}",
+            f"   ⏭️  Grants skipped:      {len(skipped)}",
+            "",
+            f"   ⏱️  Time elapsed:        {round(elapsed, 2)} seconds",
+            "",
+            "─────────────────────────────────────────────────────────────────────────────────"
+        ]
+        
+        if sample_users_in_okta:
+            output_lines.append("")
+            output_lines.append("👥 SAMPLE USERS NOW IN OKTA:")
+            output_lines.append("─────────────────────────────────────────────────────────────────────────────────")
+            
+            for user in sample_users_in_okta:
+                output_lines.append(f"")
+                output_lines.append(f"   👤 {user['user_email']}")
+                output_lines.append(f"       Okta User ID: {user['okta_user_id']}")
+                output_lines.append(f"       Grant ID: {user['grant_id']}")
+                output_lines.append(f"       Grant Status: {user['grant_status']}")
+                
+                if user['entitlements_in_okta']:
+                    output_lines.append(f"       Entitlements:")
+                    for ent in user['entitlements_in_okta']:
+                        ent_id = ent.get('id', '???')
+                        values = ent.get('values', [])
+                        value_names = [v.get('id', '???') for v in values]
+                        output_lines.append(f"         • {ent_id}: {', '.join(value_names)}")
+                
+                output_lines.append(f"       🔗 View in Okta: https://{okta_client.domain}/admin/user/profile/view/{user['okta_user_id']}#tab-applications")
+        
+        if not_found_users:
+            output_lines.append("")
+            output_lines.append("⚠️  USERS NOT FOUND IN OKTA (skipped):")
+            output_lines.append("─────────────────────────────────────────────────────────────────────────────────")
+            for email in not_found_users[:10]:
+                output_lines.append(f"   • {email}")
+            if len(not_found_users) > 10:
+                output_lines.append(f"   ... and {len(not_found_users) - 10} more")
+        
+        if failed_grants:
+            output_lines.append("")
+            output_lines.append("❌ FAILED GRANTS:")
+            output_lines.append("─────────────────────────────────────────────────────────────────────────────────")
+            for fail in failed_grants[:5]:
+                output_lines.append(f"   • User {fail.get('userId', '???')}: {fail.get('error', 'Unknown error')}")
+        
+        output_lines.extend([
+            "",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            "✅ WORKFLOW COMPLETE",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            "",
+            f"   📁 CSV file moved to: processed_and_assigned/",
+            "",
+            f"   📈 Rate Limits:",
+            f"       • Requests last minute: {rate_status.get('requestsLastMinute', 0)}",
+            f"       • Total requests: {rate_status.get('stats', {}).get('totalRequests', 0)}",
+            "",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        ])
+        
+        return "\n".join(output_lines)
     
     except Exception as e:
         logger.error(f"User grants failed: {e}", exc_info=True)
-        return json.dumps({
-            "status": "FAILED",
-            "error": str(e),
-            "progress": progress
-        })
+        return f"❌ FAILED: {str(e)}\n\nProgress:\n" + "\n".join(progress)
 
 
 # ============================================

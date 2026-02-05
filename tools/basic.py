@@ -225,6 +225,7 @@ async def list_csv_files(args: Dict[str, Any]) -> str:
 def get_csv_path(file_identifier: str) -> Optional[Path]:
     """
     Resolves a CSV path from a filename OR a list index number (string).
+    Searches CSV_FOLDER and all subdirectories recursively.
     Auto-downloads from S3 if not found locally.
     """
     import logging
@@ -236,18 +237,35 @@ def get_csv_path(file_identifier: str) -> Optional[Path]:
         if 0 <= idx < len(files):
             return files[idx]
     
+    # Check direct path first
     potential_path = CSV_FOLDER / file_identifier
     if potential_path.exists() and potential_path.is_file():
         return potential_path
     
+    # Add .csv extension if not present
     if not file_identifier.lower().endswith(".csv"):
         file_identifier_csv = f"{file_identifier}.csv"
-        potential_path = CSV_FOLDER / file_identifier_csv
-        if potential_path.exists() and potential_path.is_file():
-            return potential_path
     else:
         file_identifier_csv = file_identifier
     
+    potential_path = CSV_FOLDER / file_identifier_csv
+    if potential_path.exists() and potential_path.is_file():
+        return potential_path
+    
+    # Search recursively in all subdirectories
+    for match in CSV_FOLDER.rglob(file_identifier_csv):
+        if match.is_file():
+            logger.info(f"Found CSV in subdirectory: {match}")
+            return match
+    
+    # Also try without extension in subdirectories
+    if file_identifier != file_identifier_csv:
+        for match in CSV_FOLDER.rglob(file_identifier):
+            if match.is_file():
+                logger.info(f"Found CSV in subdirectory: {match}")
+                return match
+    
+    # Try S3 download as last resort
     if s3_client.enabled:
         logger.info(f"File {file_identifier_csv} not found locally, attempting S3 download")
         import asyncio
@@ -292,6 +310,302 @@ async def read_csv_file(args: Dict[str, Any]) -> str:
             "⚠️  REQUIRED: Please provide the Okta App ID to process this file.\n"
             "   Example: \"The App ID is 0oa1234567890ABCDEF\"\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+
+# ============================================
+# CSV Analysis for Entitlements
+# ============================================
+
+# Known column patterns for classification
+IDENTIFIER_COLUMNS = {'username', 'email', 'user_id', 'userid', 'login', 'employee_id', 'employeeid', 'samaccountname'}
+AUDIT_COLUMNS = {'access_date', 'action_type', 'effective_access', 'last_used', 'timestamp', 'created_at', 'updated_at'}
+DATE_PATTERNS = {'date', 'expir', 'valid_until', 'start_date', 'end_date'}
+# Resource column is ignored because each CSV represents one application
+IGNORE_COLUMNS = {'resource', 'application', 'app', 'system', 'target_app', 'target_system'}
+
+
+def _classify_column(col_name: str, unique_values: int, total_rows: int, max_per_user: int, sample_values: List[str]) -> Dict[str, Any]:
+    """Classify a column as entitlement, attribute, identifier, or audit."""
+    col_lower = col_name.lower().replace(' ', '_').replace('-', '_')
+    
+    # Check if it's a user identifier
+    if col_lower in IDENTIFIER_COLUMNS:
+        return {
+            "type": "user_identifier",
+            "description": "Used to match CSV users to Okta users",
+            "action": "match_users"
+        }
+    
+    # Check if it's an ignored column (e.g., Resource - since each CSV = one app)
+    if col_lower in IGNORE_COLUMNS:
+        return {
+            "type": "ignored",
+            "description": "Ignored - each CSV represents one application",
+            "action": "ignore"
+        }
+    
+    # Check if it's an audit/analytics column
+    if col_lower in AUDIT_COLUMNS or any(audit in col_lower for audit in ['action', 'timestamp', 'log']):
+        return {
+            "type": "audit",
+            "description": "Audit/analytics data - not used for provisioning",
+            "action": "ignore"
+        }
+    
+    # Check if it's a date field (potential app attribute)
+    if any(pattern in col_lower for pattern in DATE_PATTERNS):
+        return {
+            "type": "app_attribute",
+            "value_type": "single",
+            "description": "Date field - application profile attribute",
+            "action": "add_to_app_profile_schema"
+        }
+    
+    # Determine if it's entitlement or attribute based on cardinality
+    # Low cardinality (few unique values) = likely entitlement
+    # High cardinality (many unique values) = likely attribute
+    cardinality_ratio = unique_values / total_rows if total_rows > 0 else 0
+    
+    if unique_values <= 50 and cardinality_ratio < 0.1:
+        # Low cardinality - this is an entitlement
+        value_type = "multi" if max_per_user > 1 else "single"
+        return {
+            "type": "entitlement",
+            "value_type": value_type,
+            "description": f"Entitlement ({value_type}-value) - {unique_values} unique values",
+            "action": "create_entitlement_type"
+        }
+    else:
+        # High cardinality - this is an attribute
+        return {
+            "type": "app_attribute",
+            "value_type": "single",
+            "description": f"Application attribute - {unique_values} unique values",
+            "action": "add_to_app_profile_schema"
+        }
+
+
+def _detect_data_quality_issues(df, columns: List[str]) -> List[Dict[str, Any]]:
+    """Detect data quality issues in the CSV."""
+    issues = []
+    
+    for col in columns:
+        # Check for missing values
+        null_count = df[col].isna().sum()
+        if null_count > 0:
+            issues.append({
+                "column": col,
+                "issue": "missing_values",
+                "count": int(null_count),
+                "percentage": f"{(null_count / len(df)) * 100:.1f}%"
+            })
+        
+        # Check for whitespace issues
+        if df[col].dtype == 'object':
+            whitespace_count = df[col].astype(str).str.contains(r'^\s+|\s+$', regex=True, na=False).sum()
+            if whitespace_count > 0:
+                issues.append({
+                    "column": col,
+                    "issue": "leading_trailing_whitespace",
+                    "count": int(whitespace_count)
+                })
+        
+        # Check for inconsistent casing (for categorical columns)
+        if df[col].dtype == 'object':
+            unique_vals = df[col].dropna().unique()
+            if len(unique_vals) <= 50:  # Only check low-cardinality columns
+                lower_unique = set(str(v).lower() for v in unique_vals)
+                if len(lower_unique) < len(unique_vals):
+                    issues.append({
+                        "column": col,
+                        "issue": "inconsistent_casing",
+                        "example": f"{len(unique_vals)} values reduce to {len(lower_unique)} when lowercased"
+                    })
+    
+    return issues
+
+
+async def analyze_csv_for_entitlements(args: Dict[str, Any]) -> str:
+    """
+    Analyze a CSV file and classify columns for entitlement management.
+    
+    Returns:
+    - Column classification (entitlement/attribute/identifier/audit)
+    - Data quality issues
+    - Sample users with their access
+    - Confirmation prompt
+    """
+    import pandas as pd
+    
+    ensure_dirs()
+    file_identifier = args.get("file")
+    if not file_identifier:
+        return "❌ Error: 'file' argument is required"
+    
+    file_path = get_csv_path(file_identifier)
+    if not file_path:
+        return f"❌ File not found: {file_identifier}"
+    
+    # Load CSV
+    try:
+        df = pd.read_csv(file_path)
+    except Exception as e:
+        return f"❌ Error reading CSV: {e}"
+    
+    filename = file_path.name
+    columns = list(df.columns)
+    
+    # Build analysis result
+    output_lines = []
+    output_lines.append("=" * 70)
+    output_lines.append(f"📊 CSV ANALYSIS: {filename}")
+    output_lines.append("=" * 70)
+    output_lines.append(f"\n📁 Basic Info: {len(df):,} rows | {len(columns)} columns")
+    
+    # ========== SECTION 1: Column Classification ==========
+    output_lines.append("\n" + "─" * 70)
+    output_lines.append("1️⃣  COLUMN CLASSIFICATION")
+    output_lines.append("─" * 70)
+    
+    column_analysis = {}
+    user_id_column = None
+    
+    for col in columns:
+        unique_values = df[col].nunique()
+        sample_values = df[col].dropna().unique()[:5].tolist()
+        
+        # Calculate max values per user (need to identify user column first)
+        # For now, assume first identifier-like column is the user key
+        if user_id_column is None:
+            col_lower = col.lower().replace(' ', '_').replace('-', '_')
+            if col_lower in IDENTIFIER_COLUMNS:
+                user_id_column = col
+        
+        max_per_user = 1
+        if user_id_column and col != user_id_column:
+            try:
+                max_per_user = df.groupby(user_id_column)[col].nunique().max()
+            except:
+                max_per_user = 1
+        
+        classification = _classify_column(col, unique_values, len(df), max_per_user, sample_values)
+        classification["unique_values"] = unique_values
+        classification["sample_values"] = [str(v) for v in sample_values]
+        column_analysis[col] = classification
+        
+        # Format output
+        type_emoji = {
+            "entitlement": "🎫",
+            "app_attribute": "📝",
+            "user_identifier": "🔑",
+            "audit": "📊",
+            "ignored": "🚫"
+        }.get(classification["type"], "❓")
+        
+        value_type_str = ""
+        if classification.get("value_type"):
+            value_type_str = f" ({classification['value_type']}-value)"
+        
+        output_lines.append(f"\n{type_emoji} {col}")
+        output_lines.append(f"   Type: {classification['type'].upper()}{value_type_str}")
+        output_lines.append(f"   Unique Values: {unique_values}")
+        output_lines.append(f"   Sample: {classification['sample_values'][:3]}")
+        output_lines.append(f"   Action: {classification['action']}")
+    
+    # ========== SECTION 2: Data Quality Issues ==========
+    output_lines.append("\n" + "─" * 70)
+    output_lines.append("2️⃣  DATA QUALITY ISSUES")
+    output_lines.append("─" * 70)
+    
+    issues = _detect_data_quality_issues(df, columns)
+    
+    if issues:
+        for issue in issues:
+            output_lines.append(f"\n⚠️  {issue['column']}: {issue['issue']}")
+            if 'count' in issue:
+                output_lines.append(f"   Count: {issue['count']}")
+            if 'percentage' in issue:
+                output_lines.append(f"   Percentage: {issue['percentage']}")
+            if 'example' in issue:
+                output_lines.append(f"   Details: {issue['example']}")
+    else:
+        output_lines.append("\n✅ No data quality issues detected")
+    
+    # ========== SECTION 3: Sample Users ==========
+    output_lines.append("\n" + "─" * 70)
+    output_lines.append("3️⃣  SAMPLE USERS (3 users with all their access)")
+    output_lines.append("─" * 70)
+    
+    if user_id_column:
+        sample_users = df[user_id_column].unique()[:3]
+        
+        for user in sample_users:
+            user_rows = df[df[user_id_column] == user]
+            output_lines.append(f"\n👤 {user}")
+            
+            for col in columns:
+                if col == user_id_column:
+                    continue
+                classification = column_analysis[col]
+                if classification["type"] in ["entitlement", "app_attribute"]:
+                    values = user_rows[col].dropna().unique().tolist()
+                    if len(values) == 1:
+                        output_lines.append(f"   {col}: {values[0]}")
+                    elif len(values) > 1:
+                        output_lines.append(f"   {col}: {values}")
+    else:
+        output_lines.append("\n⚠️  Could not identify user column - showing first 3 rows")
+        output_lines.append(df.head(3).to_string(index=False))
+    
+    # ========== SECTION 4: Summary & Confirmation ==========
+    output_lines.append("\n" + "─" * 70)
+    output_lines.append("4️⃣  SUMMARY")
+    output_lines.append("─" * 70)
+    
+    entitlements = [c for c, a in column_analysis.items() if a["type"] == "entitlement"]
+    attributes = [c for c, a in column_analysis.items() if a["type"] == "app_attribute"]
+    identifiers = [c for c, a in column_analysis.items() if a["type"] == "user_identifier"]
+    
+    output_lines.append(f"\n🎫 Entitlements to create: {len(entitlements)}")
+    for e in entitlements:
+        a = column_analysis[e]
+        output_lines.append(f"   • {e} ({a['value_type']}-value) - {a['unique_values']} values")
+    
+    output_lines.append(f"\n📝 App attributes to add: {len(attributes)}")
+    for attr in attributes:
+        output_lines.append(f"   • {attr}")
+    
+    output_lines.append(f"\n🔑 User identifier: {identifiers[0] if identifiers else 'NOT FOUND'}")
+    
+    # Cache the analysis for later use
+    cache_data = {
+        "filename": filename,
+        "file_path": str(file_path),
+        "row_count": len(df),
+        "columns": columns,
+        "column_analysis": column_analysis,
+        "user_id_column": user_id_column,
+        "issues": issues,
+        "entitlements": entitlements,
+        "attributes": attributes
+    }
+    set_cached_csv(filename, cache_data)
+    
+    # Confirmation prompt
+    output_lines.append("\n" + "=" * 70)
+    output_lines.append("⚠️  CONFIRMATION REQUIRED")
+    output_lines.append("=" * 70)
+    output_lines.append("\nPlease review the analysis above and confirm:")
+    output_lines.append("  • Are the column classifications correct?")
+    output_lines.append("  • Should any entitlements be attributes instead (or vice versa)?")
+    output_lines.append("  • Are there data quality issues that need fixing first?")
+    output_lines.append("\nReply with:")
+    output_lines.append("  ✅ 'Confirmed' - to proceed with this analysis")
+    output_lines.append("  🔄 'Change X to Y' - to reclassify a column")
+    output_lines.append("  ❌ 'Cancel' - to abort")
+    
+    return "\n".join(output_lines)
+
 
 async def move_to_processed(args: Dict[str, Any]) -> str:
     ensure_dirs()

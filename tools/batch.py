@@ -183,7 +183,22 @@ async def okta_batch_assign_users(args: Dict[str, Any]) -> str:
 
 
 async def okta_batch_create_grants(args: Dict[str, Any]) -> str:
-    """Create multiple grants in parallel."""
+    """
+    Create multiple governance grants in parallel.
+    
+    API Doc: https://developer.okta.com/docs/api/iga/openapi/governance.api/tag/Grants/#tag/Grants/operation/createGrant
+    
+    Expected Response Structure (per official docs):
+    {
+        "id": "0ggb0oNGTSWTBKOLGLNR",
+        "grantType": "CUSTOM",
+        "status": "ACTIVE",  # MUST be ACTIVE for success
+        "target": {"externalId": "APP_ID", "type": "APPLICATION"},
+        "targetPrincipal": {"externalId": "USER_ID", "type": "OKTA_USER"},
+        "entitlements": [{"id": "...", "values": [{"id": "..."}]}],
+        ...
+    }
+    """
     grants = args.get("grants", [])
     concurrency = args.get("concurrency", 5)
     
@@ -204,18 +219,35 @@ async def okta_batch_create_grants(args: Dict[str, Any]) -> str:
             result = await okta_client.execute_request("POST", url, body=b)
             
             if result["success"]:
-                 return {
-                     "status": "created",
-                     "userId": u,
-                     "grantId": result["response"].get("id"),
-                     "index": idx
-                 }
+                response = result["response"]
+                grant_id = response.get("id")
+                grant_status = response.get("status")
+                
+                # Validate response per official documentation
+                # A successful grant MUST have an id and status should be ACTIVE
+                if not grant_id:
+                    e = Exception(f"Grant created but no ID returned. Response: {response}")
+                    e.response = response
+                    raise e
+                
+                # Log warning if status is not ACTIVE (but don't fail)
+                if grant_status and grant_status != "ACTIVE":
+                    logger.warning(f"Grant {grant_id} created with status '{grant_status}' (expected ACTIVE)")
+                
+                return {
+                    "status": "created",
+                    "userId": u,
+                    "grantId": grant_id,
+                    "grantStatus": grant_status,
+                    "entitlements": response.get("entitlements", []),
+                    "index": idx
+                }
             else:
-                 err = result.get("response", {})
-                 error_msg = err.get("errorSummary", str(err)) if isinstance(err, dict) else str(err)
-                 e = Exception(f"HTTP {result['httpCode']}: {error_msg}")
-                 e.response = err
-                 raise e
+                err = result.get("response", {})
+                error_msg = err.get("errorSummary", str(err)) if isinstance(err, dict) else str(err)
+                e = Exception(f"HTTP {result['httpCode']}: {error_msg}")
+                e.response = err
+                raise e
         
         tasks.append(BatchedTask(
             id=f"{user_id}:{i}",
@@ -234,7 +266,9 @@ async def okta_batch_create_grants(args: Dict[str, Any]) -> str:
     for r in results["succeeded"]:
         created.append({
             "userId": r["result"]["userId"],
-            "grantId": r["result"]["grantId"]
+            "grantId": r["result"]["grantId"],
+            "grantStatus": r["result"].get("grantStatus", "UNKNOWN"),
+            "entitlements": r["result"].get("entitlements", [])
         })
     
     for r in results["failed"]:

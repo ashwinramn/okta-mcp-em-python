@@ -115,7 +115,23 @@ async def okta_assign_user_to_app(appId: str, userId: str) -> str:
 
 @mcp.tool()
 async def okta_iga_create_custom_grant(grantBody: Dict[str, Any]) -> str:
-    """Create a CUSTOM grant. grantBody must be the complete JSON body."""
+    """
+    Create a CUSTOM governance grant to assign entitlements to a user.
+    
+    API Doc: https://developer.okta.com/docs/api/iga/openapi/governance.api/tag/Grants/#tag/Grants/operation/createGrant
+    
+    grantBody must be the complete JSON body with structure:
+    {
+        "grantType": "CUSTOM",
+        "target": {"externalId": "APP_ID", "type": "APPLICATION"},
+        "targetPrincipal": {"externalId": "USER_ID", "type": "OKTA_USER"},
+        "entitlements": [
+            {"id": "ENTITLEMENT_ID", "values": [{"id": "VALUE_ID"}, {"id": "VALUE_ID_2"}]}
+        ]
+    }
+    
+    Expected success response includes: id, status="ACTIVE", entitlements array
+    """
     return await api.okta_iga_create_custom_grant({"grantBody": grantBody})
 
 @mcp.tool()
@@ -174,8 +190,22 @@ async def okta_batch_assign_users(appId: str, userIds: List[str], concurrency: i
 
 @mcp.tool()
 async def okta_batch_create_grants(grants: List[Dict[str, Any]], concurrency: int = 5) -> str:
-    """Create multiple grants in parallel.
-    grants: List of objects with 'userId' and 'grantBody'.
+    """
+    Create multiple governance grants in parallel.
+    
+    API Doc: https://developer.okta.com/docs/api/iga/openapi/governance.api/tag/Grants/#tag/Grants/operation/createGrant
+    
+    grants: List of objects with:
+        - userId: The Okta user ID (for tracking)
+        - grantBody: The complete grant request body:
+            {
+                "grantType": "CUSTOM",
+                "target": {"externalId": "APP_ID", "type": "APPLICATION"},
+                "targetPrincipal": {"externalId": "USER_ID", "type": "OKTA_USER"},
+                "entitlements": [{"id": "ENT_ID", "values": [{"id": "VALUE_ID"}]}]
+            }
+    
+    Returns: Summary with successful grants (including grantId, grantStatus, entitlements) and failures
     """
     return await batch.okta_batch_create_grants({"grants": grants, "concurrency": concurrency})
 
@@ -188,7 +218,7 @@ async def analyze_csv_for_entitlements(filename: str) -> str:
     """
     STAGE 1 of 3: Analyze a CSV file to identify users and entitlements.
     
-    WORKFLOW ORDER: analyze_csv_for_entitlements → prepare_entitlement_structure → execute_user_grants
+    WORKFLOW ORDER: analyze_csv_for_entitlements -> prepare_entitlement_structure -> execute_user_grants
     
     This tool:
     - Caches the CSV data for subsequent workflow steps
@@ -207,7 +237,7 @@ async def prepare_entitlement_structure(filename: str, appId: str, mode: str = "
     """
     STAGE 2 of 3: Create the entitlement structure in Okta using the Entitlements API.
     
-    WORKFLOW ORDER: analyze_csv_for_entitlements → prepare_entitlement_structure → execute_user_grants
+    WORKFLOW ORDER: analyze_csv_for_entitlements -> prepare_entitlement_structure -> execute_user_grants
     
     THIS IS THE CRITICAL STEP that creates entitlements in Okta!
     Uses: POST /governance/api/v1/entitlements
@@ -236,9 +266,9 @@ async def execute_user_grants(filename: str, appId: str) -> str:
     """
     STAGE 3 of 3 (FINAL): Grant entitlements to users from the CSV.
     
-    WORKFLOW ORDER: analyze_csv_for_entitlements → prepare_entitlement_structure → execute_user_grants
+    WORKFLOW ORDER: analyze_csv_for_entitlements -> prepare_entitlement_structure -> execute_user_grants
     
-    ⚠️  WARNING: This tool will FAIL if prepare_entitlement_structure was not run first!
+    WARNING: This tool will FAIL if prepare_entitlement_structure was not run first!
     The entitlement structure MUST exist in Okta before grants can be created.
     
     This tool:

@@ -203,13 +203,19 @@ async def okta_iga_list_entitlements(args: Dict[str, Any]) -> str:
         return json.dumps({"error": result.get("error"), "data": []})
 
 async def okta_iga_list_entitlement_values(args: Dict[str, Any]) -> str:
+    """List values for an entitlement - handles paginated API response."""
     ent_id = args.get("entitlementId")
     url = f"/governance/api/v1/entitlements/{ent_id}/values"
     
     result = await okta_client.execute_request("GET", url)
     
     if result["success"]:
-        return json.dumps(result.get("response", []))
+        response = result.get("response", [])
+        # Handle paginated response: {"data": [...], "_links": {...}}
+        if isinstance(response, dict) and "data" in response:
+            return json.dumps(response["data"])
+        # Handle direct array response
+        return json.dumps(response)
     else:
         return json.dumps({"error": result.get("response", {}).get("errorSummary", "Unknown error"), "data": []})
 
@@ -245,19 +251,74 @@ async def okta_assign_user_to_app(args: Dict[str, Any]) -> str:
          return f"❌ Failed to assign user to app\nHTTP {result['httpCode']}\n\n{json.dumps(result['response'], indent=2)}"
 
 async def okta_iga_create_custom_grant(args: Dict[str, Any]) -> str:
+    """
+    Create a governance grant for a user on an application.
+    
+    API Doc: https://developer.okta.com/docs/api/iga/openapi/governance.api/tag/Grants/#tag/Grants/operation/createGrant
+    
+    Grant Types:
+    - CUSTOM: Assign specific entitlements with values
+    - POLICY: Grant based on policy rules  
+    - ENTITLEMENT-BUNDLE: Grant a bundle of entitlements
+    
+    Args:
+        grantBody: The grant request body with structure:
+            {
+                "grantType": "CUSTOM",
+                "target": {"externalId": "APP_ID", "type": "APPLICATION"},
+                "targetPrincipal": {"externalId": "USER_ID", "type": "OKTA_USER"},
+                "entitlements": [
+                    {"id": "ENTITLEMENT_ID", "values": [{"id": "VALUE_ID"}]}
+                ]
+            }
+    
+    Expected Success Response:
+        {
+            "id": "0ggb0oNGTSWTBKOLGLNR",
+            "grantType": "CUSTOM",
+            "status": "ACTIVE",
+            "target": {"externalId": "APP_ID", "type": "APPLICATION"},
+            "targetPrincipal": {"externalId": "USER_ID", "type": "OKTA_USER"},
+            "entitlements": [...],
+            ...
+        }
+    """
     grant_body = args.get("grantBody")
     url = "/governance/api/v1/grants"
     
     result = await okta_client.execute_request("POST", url, body=grant_body)
     
     if result["success"]:
-        return f"✅ Successfully created grant\n\n{json.dumps(result['response'], indent=2)}"
+        response = result["response"]
+        grant_id = response.get("id")
+        grant_status = response.get("status")
+        
+        # Validate response per official Okta documentation
+        validation_notes = []
+        if not grant_id:
+            validation_notes.append("⚠️ WARNING: No grant ID in response")
+        if grant_status != "ACTIVE":
+            validation_notes.append(f"⚠️ WARNING: Grant status is '{grant_status}' (expected 'ACTIVE')")
+        
+        validation_str = "\n".join(validation_notes) + "\n\n" if validation_notes else ""
+        
+        return f"✅ Successfully created grant (ID: {grant_id}, Status: {grant_status})\n\n{validation_str}{json.dumps(response, indent=2)}"
     else:
         return (f"❌ Failed to create grant\nHTTP {result['httpCode']}\n\n"
                 f"Request Body:\n{json.dumps(grant_body, indent=2)}\n\n"
                 f"Error Response:\n{json.dumps(result['response'], indent=2)}")
 
 async def okta_iga_list_grants(args: Dict[str, Any]) -> str:
+    """
+    List grants for a user/resource.
+    
+    API Doc: https://developer.okta.com/docs/api/iga/openapi/governance.api/tag/Grants/
+    
+    Args:
+        filter: SCIM filter expression, e.g.:
+            target.externalId eq "APP_ID" AND target.type eq "APPLICATION" AND 
+            targetPrincipal.externalId eq "USER_ID" AND targetPrincipal.type eq "OKTA_USER"
+    """
     filter_expr = args.get("filter")
     url = f"/governance/api/v1/grants?filter={quote(filter_expr)}"
     
@@ -267,6 +328,84 @@ async def okta_iga_list_grants(args: Dict[str, Any]) -> str:
          return f"✅ Successfully retrieved grants\n\n{json.dumps(result['response'], indent=2)}"
     else:
          return f"❌ Failed to list grants\nHTTP {result['httpCode']}\n\n{json.dumps(result['response'], indent=2)}"
+
+
+async def okta_iga_get_principal_entitlements(args: Dict[str, Any]) -> str:
+    """
+    Retrieve the effective entitlements for a user on a resource.
+    
+    This is the API to verify what entitlements a user actually has after 
+    all grants are evaluated.
+    
+    API Doc: https://developer.okta.com/docs/api/iga/openapi/governance.api/tag/Principal-Entitlements/
+    
+    Args:
+        appId: The application ID
+        userId: The Okta user ID
+    
+    Returns:
+        List of effective entitlements with their values
+    """
+    app_id = args.get("appId")
+    user_id = args.get("userId")
+    
+    if not app_id or not user_id:
+        return json.dumps({
+            "status": "FAILED",
+            "error": "Both appId and userId are required"
+        })
+    
+    # Build the filter expression per the API docs
+    filter_expr = (
+        f'parent.externalId eq "{app_id}" AND parent.type eq "APPLICATION" AND '
+        f'targetPrincipal.externalId eq "{user_id}" AND targetPrincipal.type eq "OKTA_USER"'
+    )
+    url = f"/governance/api/v1/principal-entitlements?filter={quote(filter_expr)}"
+    
+    result = await okta_client.execute_request("GET", url)
+    
+    if result["success"]:
+        response = result.get("response", {})
+        data = response.get("data", []) if isinstance(response, dict) else response
+        
+        if not data:
+            return json.dumps({
+                "status": "NO_ENTITLEMENTS",
+                "message": f"No effective entitlements found for user {user_id} on app {app_id}",
+                "appId": app_id,
+                "userId": user_id
+            }, indent=2)
+        
+        # Format the entitlements nicely
+        entitlements_summary = []
+        for ent in data:
+            ent_info = {
+                "name": ent.get("name"),
+                "id": ent.get("id"),
+                "multiValue": ent.get("multiValue", False),
+                "values": [
+                    {"value": v.get("value"), "displayName": v.get("displayName")}
+                    for v in ent.get("values", [])
+                ]
+            }
+            entitlements_summary.append(ent_info)
+        
+        return json.dumps({
+            "status": "SUCCESS",
+            "appId": app_id,
+            "userId": user_id,
+            "entitlementCount": len(entitlements_summary),
+            "entitlements": entitlements_summary,
+            "raw_response": response
+        }, indent=2)
+    else:
+        return json.dumps({
+            "status": "FAILED",
+            "error": result.get("response", {}).get("errorSummary", "Unknown error"),
+            "httpCode": result.get("httpCode"),
+            "appId": app_id,
+            "userId": user_id
+        }, indent=2)
 
 async def okta_get_rate_status(args: Dict[str, Any]) -> str:
     status = tracker.get_status()
@@ -301,14 +440,20 @@ async def okta_create_app_attributes(args: Dict[str, Any]) -> str:
     """
     Create application profile attributes (custom properties).
     
+    API Doc: https://developer.okta.com/docs/api/openapi/okta-management/management/tag/ApplicationUsers/
+    
     This is for NON-ENTITLEMENT attributes like:
     - User_ID, Employee_Number (user identifiers)
     - Access_Date, Last_Login (temporal fields)
     - Department, Manager (organizational fields)
     - Status, Active (status flags)
     
-    DO NOT use this for entitlements! Entitlements (like Role, Permission_Set) 
-    should be created using prepare_entitlement_structure().
+    ⚠️ DO NOT use this for entitlements! 
+    Entitlements (like Role, Permission_Set) should be created using:
+    - prepare_entitlement_structure() which calls /governance/api/v1/entitlements
+    
+    App user profile attributes are sent to the application during SSO/provisioning.
+    Entitlements are managed through Okta Identity Governance for access control.
     
     Args:
         appId: The Okta application ID

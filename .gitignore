@@ -52,4 +52,12 @@ csv/generated/
 # Processed CSV files
 csv/processed/*.csv
 csv/processed_and_assigned/*.csv
-# csv/processed_and_assigned/
+
+# Test data CSV files
+csv/test_data/*.csv
+csv/*.csv
+
+# JSON data files
+*.json
+!package.json
+!package-lock.json
