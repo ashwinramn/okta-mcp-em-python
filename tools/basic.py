@@ -159,18 +159,19 @@ async def okta_test(args: Dict[str, Any]) -> str:
     else:
         csv_msg = "      (None found locally)"
 
-    menu = (
-         "\n\n🤖 **MCP MAIN MENU**"
-         "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-         "\n1️⃣  **CSV Processing**"
-         f"\n   Local files:{csv_msg}"
-         "\n   > Action: `analyze_csv_for_entitlements('filename.csv')`"
-         "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    # New guided workflow menu
+    next_step = (
+        "\n\n✅ **Ready to go!**"
+        "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        "\n\n➡️  **Next:** Call `show_workflow_menu` to see available workflows"
+        "\n\n   Or tell me what you'd like to do:"
+        "\n   • \"Import a CSV file\" → CSV Import workflow"
+        "\n   • \"Create bundles from existing access\" → Pattern Mining workflow"
     )
 
     return json.dumps({
         "success": True,
-        "message": f"✅ Okta tenant connected successfully!{s3_instructions}{menu}",
+        "message": f"✅ Okta tenant connected successfully!{s3_instructions}{next_step}",
         "details": {
             "okta": {
                 "domain": okta_client.domain,

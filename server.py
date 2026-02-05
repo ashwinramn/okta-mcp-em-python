@@ -16,7 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from tools import basic, api, batch, workflow
+from tools import basic, api, batch, workflow, bundle, menu
 
 # Initialize FastMCP
 mcp = FastMCP("okta-mcp-em-python")
@@ -47,6 +47,16 @@ class GrantItem(BaseModel):
 async def okta_test() -> str:
     """Test connection to Okta tenant by verifying environment variables and making an API call to /api/v1/users/me."""
     return await basic.okta_test({})
+
+@mcp.tool()
+async def show_workflow_menu() -> str:
+    """Display the main workflow menu. Call this after okta_test succeeds to see available workflows.
+    
+    Shows two workflow options:
+    1. Import CSV → Okta: Import access data from CSV files into Okta as entitlements
+    2. Mine Patterns → Bundles: Analyze existing entitlements to create access bundles
+    """
+    return await menu.show_workflow_menu({})
 
 @mcp.tool()
 async def list_csv_files() -> str:
@@ -325,6 +335,108 @@ async def process_entitlements_workflow(
         "descriptions": entitlementDescriptions,
         "confirm_new_entitlements": confirm_new_entitlements,
         "stage": stage
+    })
+
+
+# ===========================================
+# BUNDLE GENERATION TOOLS
+# ===========================================
+
+@mcp.tool()
+async def analyze_entitlement_patterns(
+    appId: str,
+    profileAttributes: List[str] = None,
+    threshold: float = 75,
+    includeMultiAttribute: bool = True,
+    multiAttributeDepth: int = 2
+) -> str:
+    """
+    Analyze entitlement patterns for an application.
+    
+    Discovers patterns between user profile attributes and their entitlements.
+    For example: "90% of users in department=Engineering have Role=Developer"
+    
+    Args:
+        appId: Required. The Okta application ID to analyze.
+        profileAttributes: Optional. Profile attributes to analyze.
+            Default: ["department", "title", "employeeType", "costCenter"]
+        threshold: Optional. Minimum percentage for pattern inclusion (50-100).
+            Default: 75.
+        includeMultiAttribute: Optional. Analyze multi-attribute combinations.
+            Default: True.
+        multiAttributeDepth: Optional. Max attributes to combine (2-3).
+            Default: 2.
+    
+    Returns analysis results with discovered patterns, cached for bundle creation.
+    Use the analysis_id and pattern_id with preview_bundle_creation to see bundle details.
+    """
+    return await bundle.analyze_entitlement_patterns({
+        "appId": appId,
+        "profileAttributes": profileAttributes,
+        "threshold": threshold,
+        "includeMultiAttribute": includeMultiAttribute,
+        "multiAttributeDepth": multiAttributeDepth
+    })
+
+
+@mcp.tool()
+async def preview_bundle_creation(
+    analysisId: str,
+    patternId: str,
+    bundleName: str = None,
+    description: str = None
+) -> str:
+    """
+    Preview bundle creation from a discovered pattern (dry run).
+    
+    Shows exactly what would be created without making any changes.
+    Run analyze_entitlement_patterns first to get the analysisId and patternId.
+    
+    Args:
+        analysisId: Required. The analysis ID from analyze_entitlement_patterns.
+        patternId: Required. The pattern ID to create a bundle from.
+        bundleName: Optional. Custom name for the bundle.
+        description: Optional. Custom description for the bundle.
+    
+    Returns preview of the bundle including the API payload that would be sent.
+    """
+    return await bundle.preview_bundle_creation({
+        "analysisId": analysisId,
+        "patternId": patternId,
+        "bundleName": bundleName,
+        "description": description
+    })
+
+
+@mcp.tool()
+async def create_bundle_from_pattern(
+    analysisId: str,
+    patternId: str,
+    bundleName: str,
+    description: str = None,
+    confirmCreation: bool = False
+) -> str:
+    """
+    Create an entitlement bundle from a discovered pattern.
+    
+    This will create a real bundle in Okta. Use preview_bundle_creation first
+    to see what will be created.
+    
+    Args:
+        analysisId: Required. The analysis ID from analyze_entitlement_patterns.
+        patternId: Required. The pattern ID to create a bundle from.
+        bundleName: Required. Name for the bundle.
+        description: Optional. Description for the bundle.
+        confirmCreation: Required. Must be true to confirm bundle creation.
+    
+    Returns the created bundle details or error information.
+    """
+    return await bundle.create_bundle_from_pattern({
+        "analysisId": analysisId,
+        "patternId": patternId,
+        "bundleName": bundleName,
+        "description": description,
+        "confirmCreation": confirmCreation
     })
 
 

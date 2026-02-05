@@ -147,3 +147,227 @@ A single grant can include multiple entitlement schemas (e.g., both Role AND Acc
 2. **Assign Users to App**: `POST /api/v1/apps/{appId}/users` - Basic app assignment
 3. **Grant Entitlements**: `POST /governance/api/v1/grants` - Assign entitlement values to users
 4. **Verify**: `GET /governance/api/v1/principal-entitlements` - Check effective entitlements
+
+---
+
+## Entitlement Bundles API
+
+Bundles allow you to group multiple entitlements together for easier assignment.
+
+- **Doc URL**: https://developer.okta.com/docs/api/iga/openapi/governance.api/tag/Entitlement-Bundles/
+- **MCP Tools**: `analyze_entitlement_patterns()`, `preview_bundle_creation()`, `create_bundle_from_pattern()`
+
+### Create Entitlement Bundle
+```
+POST /governance/api/v1/entitlement-bundles
+
+Request Body:
+{
+    "name": "Engineering Standard Access",
+    "description": "Standard entitlements for Engineering department",
+    "target": {
+        "externalId": "{appId}",
+        "type": "APPLICATION"
+    },
+    "entitlements": [
+        {
+            "id": "{entitlementSchemaId}",
+            "values": [
+                {"id": "{entitlementValueId}"}
+            ]
+        }
+    ]
+}
+
+Response (201):
+{
+    "id": "enbo3j1lwErh6dn701d6",
+    "name": "Engineering Standard Access",
+    "description": "Standard entitlements for Engineering department",
+    "orn": "orn:okta:idp:{orgId}:entitlement-bundles:enbo3j1lwErh6dn701d6",
+    "status": "ACTIVE",
+    "targetResourceOrn": "orn:okta:idp:{orgId}:apps:{appType}:{appId}",
+    "target": {"externalId": "{appId}", "type": "APPLICATION"},
+    "entitlements": [...],
+    "_links": {"self": {"href": "..."}}
+}
+```
+
+### List Entitlement Bundles
+```
+GET /governance/api/v1/entitlement-bundles
+
+Query Parameters:
+- filter: SCIM filter (e.g., target.externalId eq "{appId}")
+- include: "full_entitlements" to include entitlement details
+- limit: 1-200 (default 20)
+- after: pagination cursor
+```
+
+### Grant a Bundle to User
+```
+POST /governance/api/v1/grants
+{
+    "grantType": "ENTITLEMENT-BUNDLE",
+    "entitlementBundleId": "{bundleId}",
+    "actor": "ACCESS_REQUEST",
+    "targetPrincipal": {
+        "externalId": "{userId}",
+        "type": "OKTA_USER"
+    }
+}
+```
+
+---
+
+## Grants API - List Grants (for Pattern Mining)
+
+Used to retrieve all grants for an application to analyze entitlement patterns.
+
+### List All Grants for an Application
+```
+GET /governance/api/v1/grants?filter={filter}&include=full_entitlements
+
+Required Filter (URL encoded):
+filter=target.externalId eq "{appId}" AND target.type eq "APPLICATION"
+
+Query Parameters:
+- include: "full_entitlements" - Returns complete entitlement details with names
+- limit: 1-200 (default 20)
+- after: pagination cursor
+
+Response:
+{
+    "data": [
+        {
+            "id": "0ggb0oNGTSWTBKOLGLNR",
+            "grantType": "CUSTOM",
+            "status": "ACTIVE",
+            "targetPrincipal": {
+                "externalId": "{userId}",
+                "type": "OKTA_USER"
+            },
+            "targetPrincipalOrn": "orn:okta:directory:{orgId}:users:{userId}",
+            "entitlements": [
+                {
+                    "id": "{entitlementSchemaId}",
+                    "name": "Role",
+                    "values": [
+                        {"id": "{valueId}", "name": "Admin"}
+                    ]
+                }
+            ]
+        }
+    ],
+    "_links": {
+        "self": {"href": "..."},
+        "next": {"href": "..."}  // If more pages exist
+    }
+}
+```
+
+---
+
+## Application Users API - With User Profile Expansion
+
+Used to get app users with their full Okta profile in a single call.
+
+### List App Users with Embedded User Profiles
+```
+GET /api/v1/apps/{appId}/users?expand=user&limit=200
+
+Query Parameters:
+- expand: "user" - Embeds full Okta user object in _embedded.user
+- limit: 1-500 (default 50)
+- after: pagination cursor
+
+Response:
+[
+    {
+        "id": "{appUserId}",
+        "scope": "USER",
+        "status": "PROVISIONED",
+        "credentials": {"userName": "user@example.com"},
+        "profile": {...},  // App-specific profile
+        "_embedded": {
+            "user": {
+                "id": "{oktaUserId}",
+                "status": "ACTIVE",
+                "profile": {
+                    "login": "user@example.com",
+                    "email": "user@example.com",
+                    "firstName": "John",
+                    "lastName": "Doe",
+                    "department": "Engineering",
+                    "title": "Senior Engineer",
+                    "employeeType": "Full-Time",
+                    "costCenter": "CC-1234",
+                    "division": "R&D",
+                    "organization": "Acme Corp",
+                    "manager": "manager@example.com",
+                    "employeeNumber": "EMP001",
+                    // ... any custom attributes
+                }
+            }
+        }
+    }
+]
+```
+
+**Key Optimization**: Using `expand=user` eliminates the need to make separate 
+`GET /api/v1/users/{userId}` calls for each user, dramatically reducing API calls.
+
+---
+
+## Okta Resource Name (ORN) Format
+
+ORNs are used to identify Okta resources in governance APIs.
+
+### ORN Structure
+```
+orn:{partition}:{service}:{orgId}:{objectType}:{objectId}
+```
+
+### Components
+| Component | Description | Examples |
+|-----------|-------------|----------|
+| `partition` | Environment | `okta` (production), `oktapreview` (preview) |
+| `service` | Okta service | `directory`, `idp`, `governance` |
+| `orgId` | Your org ID | `00o11edPwGqbUrsDm0g4` |
+| `objectType` | Resource type | `users`, `apps`, `groups`, `entitlement-bundles` |
+| `objectId` | Resource ID | Varies by type |
+
+### Common ORN Patterns
+| Resource | ORN Format |
+|----------|------------|
+| User | `orn:{partition}:directory:{orgId}:users:{userId}` |
+| Application | `orn:{partition}:idp:{orgId}:apps:{appType}:{appId}` |
+| Group | `orn:{partition}:directory:{orgId}:groups:{groupId}` |
+| Entitlement Bundle | `orn:{partition}:governance:{orgId}:entitlement-bundles:{bundleId}` |
+| Entitlement Value | `orn:{partition}:governance:{orgId}:entitlement-values:{valueId}` |
+
+### Finding Your Org ID
+Call `GET /api/v1/org` or check the Okta Admin Console URL.
+
+### Finding App Type (for ORN)
+The app type appears in the Admin Console URL:
+- `https://domain-admin.okta.com/admin/app/{appType}/instance/{appId}`
+- Examples: `oidc_client`, `salesforce`, `saml_2_0`
+
+---
+
+## Rate Limits Reference
+
+| API Endpoint | Rate Limit | Notes |
+|--------------|------------|-------|
+| `/api/v1/users` | ~600/min | Standard management API |
+| `/api/v1/apps/{appId}/users` | ~600/min | Standard management API |
+| `/governance/api/v1/grants` | ~100/min | IGA API - lower limits |
+| `/governance/api/v1/entitlements` | ~100/min | IGA API - lower limits |
+| `/governance/api/v1/entitlement-bundles` | ~100/min | IGA API - lower limits |
+
+**Best Practices**:
+- Use `expand=user` to reduce API calls
+- Paginate with maximum `limit` values
+- Use parallel execution with backoff for rate limits
+- Cache results when analyzing patterns
