@@ -89,14 +89,13 @@ async def analyze_csv_for_entitlements(args: Dict[str, Any]) -> str:
     try:
         df = pd.read_csv(filepath, dtype=str).fillna("")
         
-        # Columns to IGNORE (not treat as entitlements)
-        # These are identity columns, profile attributes, and metadata
-        IGNORED_COLUMNS = {
+        # Known user profile columns (lookup only - do NOT create)
+        USER_PROFILE_COLUMNS = {
             # Identity columns (used to find users in Okta)
-            "User_Email", "Email", "email", "User", "Username", "Login", 
+            "User_Email", "Email", "email", "User", "Username", "Login",
             "user.login", "Person_Id", "Employee_Number", "User_ID", "employee_id",
             "okta_id", "samaccountname", "upn", "user_principal_name",
-            # Profile columns (user metadata)
+            # Common profile fields
             "firstName", "First Name", "first_name", "First_Name",
             "lastName", "Last Name", "last_name", "Last_Name",
             "Full Name", "full_name", "fullName", "displayName", "Display_Name",
@@ -104,16 +103,38 @@ async def analyze_csv_for_entitlements(args: Dict[str, Any]) -> str:
             "Title", "Job_Title", "job_title", "Position",
             "phone", "Phone", "mobile", "Mobile", "telephone",
             "Department", "department", "Dept", "dept",
-            # Metadata columns
-            "Effective_Access", "Last_Login", "Date", "Created_Date", 
-            "Updated_Date", "Status", "Active", "Access_Date", 
-            "Action_Type", "Action_Date", "Timestamp", "Modified_Date"
         }
-        
-        ignored_lower = {k.lower() for k in IGNORED_COLUMNS}
-        
-        attr_cols = [c for c in df.columns if c in IGNORED_COLUMNS or c.lower() in ignored_lower]
-        ent_cols = [c for c in df.columns if c not in attr_cols]
+
+        # Known app profile columns (app-specific metadata -> create via App Schema API)
+        APP_PROFILE_COLUMNS = {
+            "Last_Login", "Last Login", "Access_Date", "Access Date", "AccessDate",
+            "Effective_Access", "Date", "Created_Date", "Updated_Date", "Action_Type", "Action_Date", "Timestamp", "Modified_Date",
+        }
+
+        # Classify columns into three types: User Profile Attribute, App Profile Attribute, Entitlement
+        column_classification: Dict[str, str] = {}
+        user_profile_cols: List[str] = []
+        app_profile_cols: List[str] = []
+        ent_cols: List[str] = []
+
+        for c in df.columns:
+            c_lower = c.lower()
+            if c_lower in {x.lower() for x in USER_PROFILE_COLUMNS}:
+                column_classification[c] = "User Profile Attribute"
+                user_profile_cols.append(c)
+            elif c_lower in {x.lower() for x in APP_PROFILE_COLUMNS}:
+                column_classification[c] = "App Profile Attribute"
+                app_profile_cols.append(c)
+            else:
+                # Default to Entitlement for anything not recognized as a profile column
+                column_classification[c] = "Entitlement"
+                ent_cols.append(c)
+
+        # Ensure email-like columns are marked as user profile attributes
+        for candidate in ("email", "Email", "User_Email", "User", "Username", "Login", "user.login"):
+            if candidate in df.columns and candidate not in user_profile_cols:
+                column_classification[candidate] = "User Profile Attribute"
+                user_profile_cols.append(candidate)
         
         # Look for email column - prioritize columns with actual email addresses
         # Priority: columns named "email" > columns containing @ symbols > other candidates
@@ -220,7 +241,9 @@ async def analyze_csv_for_entitlements(args: Dict[str, Any]) -> str:
             "filename": filepath.name,
             "email_column": email_col,
             "entitlement_columns": ent_cols,
-            "attribute_columns": attr_cols,
+            "user_profile_columns": user_profile_cols,
+            "app_profile_columns": app_profile_cols,
+            "column_classification": column_classification,
             "entitlements": entitlements,
             "entitlement_details": entitlement_details,
             "unique_users": unique_users,
@@ -246,9 +269,19 @@ async def analyze_csv_for_entitlements(args: Dict[str, Any]) -> str:
             f"   Permitted rows: {permitted_rows}",
             f"   Unique users: {len(unique_users)}",
             "",
+            "📋 Column Classification:",
+            "─────────────────────────────────────────────────────────────────────────────────",
+        ]
+
+        # Add classification listing
+        for col, cls in column_classification.items():
+            output_lines.append(f"  • {col} → {cls}")
+
+        output_lines.extend([
+            "",
             "📋 ENTITLEMENTS TO CREATE:",
             "─────────────────────────────────────────────────────────────────────────────────"
-        ]
+        ])
         
         for ent_name, details in entitlement_details.items():
             multi_indicator = "✅ MULTI-VALUE" if details["multiValue"] else "◻️  Single-value"
@@ -307,9 +340,10 @@ async def analyze_csv_for_entitlements(args: Dict[str, Any]) -> str:
 # STAGE 2: Prepare Entitlement Structure
 # ============================================
 
-async def _ensure_app_schema_attributes(app_id: str, entitlement_names: List[str]) -> Tuple[bool, str]:
+async def _ensure_app_schema_attributes(app_id: str, attributes: List[str]) -> Tuple[bool, str]:
     """
-    Ensure that app schema has attributes for all entitlements.
+    Ensure that app schema has attributes for all provided app-level attributes.
+    This should be used only for App Profile Attributes (not entitlements).
     Returns (success, message)
     """
     try:
@@ -323,8 +357,8 @@ async def _ensure_app_schema_attributes(app_id: str, entitlement_names: List[str
         schema = result.get("response", {})
         existing_custom = schema.get("definitions", {}).get("custom", {}).get("properties", {})
         
-        # Check which entitlement attributes are missing
-        missing_attrs = [name for name in entitlement_names if name not in existing_custom]
+        # Check which attributes are missing in the app schema
+        missing_attrs = [name for name in attributes if name not in existing_custom]
         
         if not missing_attrs:
             logger.info(f"✅ All entitlement attributes already exist in app schema")
@@ -419,8 +453,9 @@ async def prepare_entitlement_structure(args: Dict[str, Any]) -> str:
         if len(existing_names) == 0:
             logger.info("No existing entitlements found. Creating structure automatically.")
             
-            # First, ensure app schema has attributes for all entitlements
-            schema_success, schema_msg = await _ensure_app_schema_attributes(app_id, list(csv_entitlements.keys()))
+            # First, ensure app schema has attributes for any App Profile Attributes
+            app_profile_attrs = cached.get("app_profile_columns", [])
+            schema_success, schema_msg = await _ensure_app_schema_attributes(app_id, app_profile_attrs)
             if not schema_success:
                 return json.dumps({
                     "status": "FAILED",
@@ -518,23 +553,39 @@ async def _create_entitlement_structure(
     sample_user_previews: List[Dict] = None,
     mode: str = "create"
 ) -> str:
-    """Internal: Create entitlement definitions and values.
+    """Internal: Create entitlement definitions and values via the Governance Entitlements API.
     
-    CORRECT API STRUCTURE (learned from manual testing):
-    - app: {"id": app_id}
-    - attribute: entitlement name (must match app schema attribute)
-    - dataType: "string"
-    - displayName: display name for the entitlement
-    - description: generated description
-    - externalValue: external identifier (usually same as name)
-    - multiValue: true/false (based on CSV analysis)
-    - name: internal name
-    - parent: {"externalId": app_id, "type": "APPLICATION"}
-    - values: array of value objects, each with:
+    API Documentation: https://developer.okta.com/docs/api/iga/openapi/governance.api/tag/Entitlements/
+    Endpoint: POST /governance/api/v1/entitlements
+    
+    All entitlements are created as multi-value by default (multiValue: true).
+    Per the API docs: "If multiValue is true, then the dataType property is set to array."
+    
+    Request Body Schema (from API docs):
+    - name (required): string[1..255] - The display name for an entitlement property
+    - externalValue (required): string[1..255] - The value of an entitlement property
+    - dataType (required): string - The data type ("string" for single/multi-value)
+    - multiValue (required): boolean - If true, entitlement can hold multiple values
+    - parent (required): object - {externalId: app_id, type: "APPLICATION"}
+    - values: Array of objects - Collection of entitlement values
       - name: value name
-      - displayName: display name (can be same as name)
+      - description: description for the value
       - externalValue: external identifier
-      - description: generated description for this value
+    - description: string[1..1000] - The description of an entitlement property
+    
+    Example from API docs:
+    {
+        "name": "License Entitlement",
+        "externalValue": "license_entitlement",
+        "description": "Some license entitlement",
+        "parent": {"externalId": "0oafxqCAJWWGELFTYASJ", "type": "APPLICATION"},
+        "multiValue": true,
+        "dataType": "string",
+        "values": [
+            {"name": "value1", "description": "description for value1", "externalValue": "value_1"},
+            {"name": "value2", "description": "description for value2", "externalValue": "value_2"}
+        ]
+    }
     """
     created = []
     errors = []
@@ -545,43 +596,38 @@ async def _create_entitlement_structure(
         try:
             description = generate_entitlement_description(ent_name)
             
-            # Get multiValue setting from entitlement_details (detected from CSV)
-            ent_detail = entitlement_details.get(ent_name, {})
-            is_multi_value = ent_detail.get("multiValue", False)
-            
-            # Build ALL values at once - each value needs name, displayName, externalValue, description
+            # Build ALL values at once - each value needs name, description, externalValue
+            # API Doc: values array contains objects with name, description, externalValue
             values_payload = [
                 {
                     "name": val,
-                    "displayName": val,
-                    "externalValue": val,
-                    "description": generate_value_description(ent_name, val)
+                    "description": generate_value_description(ent_name, val),
+                    "externalValue": val
                 }
                 for val in values
             ]
             
+            # API Doc: POST /governance/api/v1/entitlements
+            # https://developer.okta.com/docs/api/iga/openapi/governance.api/tag/Entitlements/#tag/Entitlements/operation/createEntitlement
             url = f"https://{okta_client.domain}/governance/api/v1/entitlements"
             
-            # CORRECT STRUCTURE - all required fields based on API testing
+            # Request body per API documentation
+            # Note: dataType is "string" (not "string[]"), multiValue: true makes it multi-value
+            # API Doc: "If this property [multiValue] is true, then the dataType property is set to array"
             body = {
-                "app": {
-                    "id": app_id
-                },
-                "attribute": ent_name,  # Must match app schema attribute name
-                "dataType": "string",
-                "displayName": ent_name,
-                "description": description,
-                "externalValue": ent_name,
-                "multiValue": is_multi_value,  # Based on CSV analysis
                 "name": ent_name,
+                "externalValue": ent_name,
+                "description": description,
                 "parent": {
-                    "externalId": app_id,  # Note: externalId, not id
-                    "type": "APPLICATION"   # Must be uppercase
+                    "externalId": app_id,
+                    "type": "APPLICATION"
                 },
-                "values": values_payload  # ALL values created in one API call
+                "multiValue": True,  # Always create as multi-value per requirements
+                "dataType": "string",  # API uses "string" - multiValue:true handles array behavior
+                "values": values_payload
             }
             
-            logger.info(f"Creating entitlement: {ent_name} with {len(values)} values (multiValue={is_multi_value})")
+            logger.info(f"Creating entitlement: {ent_name} with {len(values)} values (multiValue=True)")
             logger.debug(f"Entitlement body: {json.dumps(body, indent=2)}")
             
             result = await okta_client.execute_request("POST", url, body=body)
@@ -591,13 +637,13 @@ async def _create_entitlement_structure(
                 created.append({
                     "name": ent_name,
                     "id": response_data.get("id"),
-                    "multiValue": is_multi_value,
+                    "multiValue": True,
                     "values": values,
                     "value_count": len(values),
                     "description": description,
                     "created_values": len(response_data.get("values", []))
                 })
-                logger.info(f"✅ Created entitlement '{ent_name}' with {len(values)} values (multiValue={is_multi_value})")
+                logger.info(f"✅ Created entitlement '{ent_name}' with {len(values)} values (multiValue=True)")
             else:
                 error_msg = result.get("response", {}).get("errorSummary", str(result.get("response")))
                 errors.append({"name": ent_name, "error": error_msg})

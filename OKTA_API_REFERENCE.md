@@ -2,6 +2,34 @@
 
 This document maps the MCP tools to their corresponding Okta API documentation.
 
+---
+
+## ⚠️ API Documentation Guidelines for Contributors
+
+**IMPORTANT: When creating or modifying any API calls in this codebase:**
+
+1. **Always reference the official Okta API documentation** before implementing
+2. **Add API doc URL as a comment** above any API call
+3. **Include request/response schema** from the official docs in docstrings
+4. **Copy exact field names and types** from the documentation
+5. **Test against the actual API** to verify behavior
+
+Example of properly documented API call:
+```python
+# API Doc: POST /governance/api/v1/entitlements
+# https://developer.okta.com/docs/api/iga/openapi/governance.api/tag/Entitlements/#tag/Entitlements/operation/createEntitlement
+url = f"https://{domain}/governance/api/v1/entitlements"
+body = {
+    "name": "Role",
+    "externalValue": "role",
+    "dataType": "string",  # Per API docs - NOT "string[]"
+    "multiValue": True,    # This makes it multi-value
+    ...
+}
+```
+
+---
+
 ## Identity Governance APIs (IGA)
 
 These APIs are for **entitlement management** - managing what access users have to applications.
@@ -12,6 +40,56 @@ These APIs are for **entitlement management** - managing what access users have 
 - **Doc URL**: https://developer.okta.com/docs/api/iga/openapi/governance.api/tag/Entitlements/
 - **MCP Tool**: `prepare_entitlement_structure()`
 - **Example**: Create "Role" entitlement with values like "Admin", "User", "Viewer"
+
+#### Create Entitlement - POST /governance/api/v1/entitlements
+```json
+// Request Body Schema (from official docs):
+{
+    "name": "License Entitlement",           // required: string[1..255]
+    "externalValue": "license_entitlement",  // required: string[1..255]
+    "description": "Some license entitlement", // optional: string[1..1000]
+    "parent": {                              // required: object
+        "externalId": "0oafxqCAJWWGELFTYASJ", // App ID
+        "type": "APPLICATION"
+    },
+    "multiValue": true,                      // required: boolean
+    "dataType": "string",                    // required: string (NOT "string[]")
+    "values": [                              // optional: array of value objects
+        {
+            "name": "value1",
+            "description": "description for value1",
+            "externalValue": "value_1"
+        },
+        {
+            "name": "value2", 
+            "description": "description for value2",
+            "externalValue": "value_2"
+        }
+    ]
+}
+
+// Response (201):
+{
+    "id": "esp2lr1lavoGDYw5U8g6",
+    "name": "License Entitlement",
+    "externalValue": "license_entitlement",
+    "description": "Some license entitlement",
+    "parentResourceOrn": "orn:okta:idp:00o11edPwGqbUrsDm0g4:apps:salesforce:0oafxqCAJWWGELFTYASJ",
+    "parent": {"externalId": "0oafxqCAJWWGELFTYASJ", "type": "APPLICATION"},
+    "multiValue": true,
+    "required": false,
+    "dataType": "string",
+    "values": [
+        {"id": "ent148fuJDGTsvYjP0g4", "name": "value1", ...},
+        {"id": "ent148gF8aZoRfFsh0g4", "name": "value2", ...}
+    ]
+}
+```
+
+**⚠️ IMPORTANT**: 
+- `dataType` is always `"string"` (NOT `"string[]"`)
+- `multiValue: true` is what enables multiple values per user
+- Per API docs: "If multiValue is true, then the dataType property is set to array" (internally)
 
 ### Grants API
 - **Endpoint**: `POST /governance/api/v1/grants`

@@ -59,8 +59,16 @@ def safe_parse_response(response: Any, context: str = "") -> Tuple[bool, Any]:
 # ============================================
 
 async def _list_entitlements_raw(app_id: str) -> Dict[str, Any]:
-    """Internal function to list entitlements - returns raw data structure."""
+    """
+    Internal function to list entitlements - returns raw data structure.
+    
+    API Doc: https://developer.okta.com/docs/api/iga/openapi/governance.api/tag/Entitlements/#tag/Entitlements/operation/listEntitlements
+    Endpoint: GET /governance/api/v1/entitlements
+    
+    Filter format: parent.externalId eq "{appId}" AND parent.type eq "APPLICATION"
+    """
     filter_expr = f'parent.externalId eq "{app_id}" AND parent.type eq "APPLICATION"'
+    # API Doc: GET /governance/api/v1/entitlements?filter=...
     url = f"/governance/api/v1/entitlements?filter={quote(filter_expr)}"
     
     result = await okta_client.execute_request("GET", url)
@@ -86,17 +94,36 @@ async def _list_entitlements_raw(app_id: str) -> Dict[str, Any]:
         }
 
 async def _create_entitlement_raw(app_id: str, name: str, description: str = None, values: List[Dict] = None) -> Dict[str, Any]:
-    """Internal function to create an entitlement definition."""
+    """
+    Internal function to create an entitlement definition.
+    
+    API Doc: https://developer.okta.com/docs/api/iga/openapi/governance.api/tag/Entitlements/#tag/Entitlements/operation/createEntitlement
+    Endpoint: POST /governance/api/v1/entitlements
+    
+    Request Body Schema (from official docs):
+    - name (required): string[1..255] - Display name
+    - externalValue (required): string[1..255] - External identifier
+    - dataType (required): string - Always "string" (NOT "string[]")
+    - multiValue (required): boolean - true for multi-value entitlements
+    - parent (required): {externalId: app_id, type: "APPLICATION"}
+    - description: string[1..1000]
+    - values: Array of {name, description, externalValue}
+    
+    Note: Per API docs, "If multiValue is true, then the dataType property is set to array" internally.
+    """
+    # API Doc: POST /governance/api/v1/entitlements
     url = f"https://{okta_client.domain}/governance/api/v1/entitlements"
     
+    # Request body per official Okta API documentation
     body = {
         "name": name,
-        "displayName": name,
+        "externalValue": name,  # Per API docs: required field
         "description": description or generate_entitlement_description(name),
-        "dataType": "string",
+        "dataType": "string",  # Per API docs: always "string", NOT "string[]"
+        "multiValue": True,    # Per API docs: this makes it multi-value
         "parent": {
             "type": "APPLICATION",
-            "id": app_id
+            "externalId": app_id  # Per API docs: use externalId, not id
         }
     }
     
@@ -119,9 +146,24 @@ async def _create_entitlement_raw(app_id: str, name: str, description: str = Non
         }
 
 async def _create_entitlement_value_raw(entitlement_id: str, value: str, description: str = None, entitlement_name: str = None) -> Dict[str, Any]:
-    """Internal function to create an entitlement value."""
+    """
+    Internal function to create an entitlement value.
+    
+    API Doc: https://developer.okta.com/docs/api/iga/openapi/governance.api/tag/Entitlements/#tag/Entitlements/operation/updateEntitlement
+    Endpoint: PATCH /governance/api/v1/entitlements/{entitlementId}
+    
+    Note: Values can also be created during entitlement creation via POST.
+    This function uses the update endpoint to add values to existing entitlements.
+    
+    Value object schema:
+    - name: string - Display name for the value
+    - externalValue: string - External identifier
+    - description: string - Description of the value
+    """
+    # API Doc: POST to values endpoint (alternative to PATCH)
     url = f"https://{okta_client.domain}/governance/api/v1/entitlements/{entitlement_id}/values"
     
+    # Value object per API documentation
     body = {
         "name": value,
         "externalValue": value,
@@ -203,8 +245,16 @@ async def okta_iga_list_entitlements(args: Dict[str, Any]) -> str:
         return json.dumps({"error": result.get("error"), "data": []})
 
 async def okta_iga_list_entitlement_values(args: Dict[str, Any]) -> str:
-    """List values for an entitlement - handles paginated API response."""
+    """
+    List values for an entitlement - handles paginated API response.
+    
+    API Doc: https://developer.okta.com/docs/api/iga/openapi/governance.api/tag/Entitlements/#tag/Entitlements/operation/listEntitlementValues
+    Endpoint: GET /governance/api/v1/entitlements/{entitlementId}/values
+    
+    Response format: {"data": [...], "_links": {...}, "metadata": {...}}
+    """
     ent_id = args.get("entitlementId")
+    # API Doc: GET /governance/api/v1/entitlements/{entitlementId}/values
     url = f"/governance/api/v1/entitlements/{ent_id}/values"
     
     result = await okta_client.execute_request("GET", url)
