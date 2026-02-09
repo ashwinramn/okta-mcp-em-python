@@ -860,12 +860,21 @@ async def analyze_entitlement_patterns(args: Dict[str, Any]) -> Dict[str, Any]:
     try:
         # Step 1: Get app details for naming
         progress_log.append("\n📥 Step 1: Fetching application details...")
-        app_result = await okta_client.execute_request("GET", f"/api/v1/apps/{app_id}")
+        try:
+            app_result = await okta_client.execute_request("GET", f"/api/v1/apps/{app_id}")
+        except Exception as e:
+            logger.error(f"Failed to fetch app details: {e}", exc_info=True)
+            return {
+                "success": False,
+                "error": f"Failed to fetch app details: {str(e)[:100]}",
+                "progress": progress_log
+            }
+
         if not app_result["success"]:
             error_msg = app_result.get("response", {}).get("errorSummary", "Unknown error")
             return {
                 "success": False,
-                "error": f"Failed to fetch app details: {error_msg}",
+                "error": f"Failed to fetch app details: {error_msg[:100]}",
                 "progress": progress_log
             }
         
@@ -875,9 +884,17 @@ async def analyze_entitlement_patterns(args: Dict[str, Any]) -> Dict[str, Any]:
         
         # Step 2: Fetch users with profiles
         progress_log.append("\n📥 Step 2: Fetching app users with profiles...")
-        users, user_progress = await _get_app_users_with_profiles(app_id)
-        progress_log.extend(user_progress)
-        
+        try:
+            users, user_progress = await _get_app_users_with_profiles(app_id)
+            progress_log.extend(user_progress)
+        except Exception as e:
+            logger.error(f"Failed to fetch app users: {e}", exc_info=True)
+            return {
+                "success": False,
+                "error": f"Failed to fetch app users: {str(e)[:100]}",
+                "progress": progress_log
+            }
+
         if not users:
             return {
                 "success": False,
@@ -887,9 +904,17 @@ async def analyze_entitlement_patterns(args: Dict[str, Any]) -> Dict[str, Any]:
         
         # Step 3: Fetch grants with entitlements
         progress_log.append("\n📥 Step 3: Fetching grants with entitlements...")
-        grants, grant_progress = await _get_app_grants_with_entitlements(app_id)
-        progress_log.extend(grant_progress)
-        
+        try:
+            grants, grant_progress = await _get_app_grants_with_entitlements(app_id)
+            progress_log.extend(grant_progress)
+        except Exception as e:
+            logger.error(f"Failed to fetch grants: {e}", exc_info=True)
+            return {
+                "success": False,
+                "error": f"Failed to fetch grants: {str(e)[:100]}",
+                "progress": progress_log
+            }
+
         if not grants:
             return {
                 "success": False,
@@ -1001,10 +1026,10 @@ async def analyze_entitlement_patterns(args: Dict[str, Any]) -> Dict[str, Any]:
         }
         
     except Exception as e:
-        logger.exception("Error during pattern analysis")
+        logger.error(f"Pattern analysis failed: {e}", exc_info=True)
         return {
             "success": False,
-            "error": f"Analysis failed: {str(e)}",
+            "error": f"Unexpected error during pattern analysis: {str(e)[:100]}",
             "progress": progress_log
         }
 
@@ -1040,13 +1065,20 @@ async def preview_bundle_creation(args: Dict[str, Any]) -> Dict[str, Any]:
             "success": False,
             "error": "Missing required parameter: patternId"
         }
-    
-    # Load cached analysis
-    cached = _get_cached_analysis(analysis_id)
-    if not cached:
+
+    try:
+        # Load cached analysis
+        cached = _get_cached_analysis(analysis_id)
+        if not cached:
+            return {
+                "success": False,
+                "error": f"Analysis not found: {analysis_id}. Run analyze_entitlement_patterns first."
+            }
+    except Exception as e:
+        logger.error(f"Failed to retrieve cached analysis: {e}", exc_info=True)
         return {
             "success": False,
-            "error": f"Analysis not found: {analysis_id}. Run analyze_entitlement_patterns first."
+            "error": f"Failed to retrieve analysis cache: {str(e)[:100]}"
         }
     
     # Get the actual analysis data (stored in 'data' key)
@@ -1210,13 +1242,20 @@ async def create_bundle_from_pattern(args: Dict[str, Any]) -> Dict[str, Any]:
             "success": False,
             "error": "Bundle creation requires confirmCreation=true. Use preview_bundle_creation first to review what will be created."
         }
-    
-    # Load cached analysis
-    cached = _get_cached_analysis(analysis_id)
-    if not cached:
+
+    try:
+        # Load cached analysis
+        cached = _get_cached_analysis(analysis_id)
+        if not cached:
+            return {
+                "success": False,
+                "error": f"Analysis not found: {analysis_id}. Run analyze_entitlement_patterns first."
+            }
+    except Exception as e:
+        logger.error(f"Failed to retrieve cached analysis: {e}", exc_info=True)
         return {
             "success": False,
-            "error": f"Analysis not found: {analysis_id}. Run analyze_entitlement_patterns first."
+            "error": f"Failed to retrieve analysis cache: {str(e)[:100]}"
         }
     
     # Get the actual analysis data (stored in 'data' key)
@@ -1276,19 +1315,26 @@ async def create_bundle_from_pattern(args: Dict[str, Any]) -> Dict[str, Any]:
     
     # Create the bundle
     try:
-        result = await okta_client.execute_request(
-            "POST",
-            "/governance/api/v1/entitlement-bundles",
-            {},  # headers
-            payload  # body
-        )
-        
+        try:
+            result = await okta_client.execute_request(
+                "POST",
+                "/governance/api/v1/entitlement-bundles",
+                {},  # headers
+                payload  # body
+            )
+        except Exception as api_err:
+            logger.error(f"API call failed: {api_err}", exc_info=True)
+            return {
+                "success": False,
+                "error": f"Failed to call bundle creation API: {str(api_err)[:100]}"
+            }
+
         if not result["success"]:
             error_response = result.get("response", {})
             error_msg = error_response.get("errorSummary", str(error_response))
             return {
                 "success": False,
-                "error": f"Failed to create bundle: {error_msg}",
+                "error": f"Failed to create bundle: {error_msg[:100]}",
                 "api_response": error_response
             }
         
@@ -1314,8 +1360,8 @@ async def create_bundle_from_pattern(args: Dict[str, Any]) -> Dict[str, Any]:
         }
         
     except Exception as e:
-        logger.exception("Error creating bundle")
+        logger.error(f"Bundle creation failed: {e}", exc_info=True)
         return {
             "success": False,
-            "error": f"Bundle creation failed: {str(e)}"
+            "error": f"Unexpected error during bundle creation: {str(e)[:100]}"
         }
