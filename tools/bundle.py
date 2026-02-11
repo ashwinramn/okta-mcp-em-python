@@ -23,8 +23,27 @@ from itertools import combinations
 from collections import defaultdict
 
 from client import okta_client
+from tools.api import _list_entitlements_raw, okta_iga_list_entitlement_values
+from tools.app_knowledge import (
+    ISACA_TOXIC_PAIRINGS,
+    DUTY_CATEGORIES,
+    lookup_app_by_name,
+)
 
 logger = logging.getLogger("okta_mcp")
+
+
+def _json_result(func):
+    """Decorator: ensures MCP tool functions return JSON strings, not dicts."""
+    import functools
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        result = await func(*args, **kwargs)
+        if isinstance(result, dict):
+            return json.dumps(result, indent=2, default=str)
+        return result
+    return wrapper
+
 
 # ============================================
 # Constants
@@ -58,6 +77,156 @@ class Pattern:
     percentage: float
     strength: str  # "strong", "moderate", "weak"
     matching_user_ids: List[str]  # User IDs that match this pattern
+    sod_conflicts: List[Dict[str, Any]] = None  # SoD conflicts detected for this pattern
+
+
+# ============================================
+# SoD Conflict Detection for Bundles
+# ============================================
+
+async def _check_pattern_sod_conflicts(
+    app_id: str,
+    pattern_entitlements: Dict[str, List[str]],
+    app_name: str = "",
+) -> List[Dict[str, Any]]:
+    """
+    Check if a pattern's entitlements would create SoD conflicts.
+
+    Checks three sources:
+    1. Existing SoD risk rules for this app
+    2. Known toxic pairs from the knowledge base
+    3. ISACA duty category pairings
+
+    Args:
+        app_id: Okta application ID
+        pattern_entitlements: {entitlement_name: [value1, value2, ...]}
+        app_name: App label for knowledge base lookup
+
+    Returns:
+        List of conflict dicts with source, severity, details, and recommendation.
+    """
+    conflicts = []
+
+    # Flatten all entitlement values in this pattern into a single set
+    all_values = set()
+    for values in pattern_entitlements.values():
+        all_values.update(v.lower() for v in values)
+
+    if len(all_values) < 2:
+        return conflicts  # Need at least 2 values to have a conflict
+
+    # ── Check 1: Existing SoD Risk Rules ────────────────────────────
+    try:
+        rules_url = f"https://{okta_client.domain}/governance/api/v1/risk-rules"
+        rules_result = await okta_client.execute_request("GET", rules_url)
+        if rules_result["success"]:
+            response = rules_result.get("response", {})
+            all_rules = response.get("data", response) if isinstance(response, dict) else response
+            if isinstance(all_rules, list):
+                for rule in all_rules:
+                    # Filter to rules for this app
+                    resources = rule.get("resources", [])
+                    applies_to_app = any(app_id in r.get("resourceOrn", "") for r in resources)
+                    if not applies_to_app:
+                        continue
+
+                    # Extract list1 and list2 value names from conflictCriteria
+                    criteria = rule.get("conflictCriteria", {})
+                    criteria_and = criteria.get("and", [])
+                    list1_values = set()
+                    list2_values = set()
+                    for item in criteria_and:
+                        item_name = item.get("name", "")
+                        value_block = item.get("value", {})
+                        ent_list = value_block.get("value", [])
+                        target_set = list1_values if item_name == "list1" else list2_values
+                        for ent in ent_list:
+                            for val in ent.get("values", []):
+                                vname = val.get("name", "")
+                                if vname:
+                                    target_set.add(vname.lower())
+
+                    # Check if this pattern contains values from BOTH lists
+                    has_list1 = all_values & list1_values
+                    has_list2 = all_values & list2_values
+                    if has_list1 and has_list2:
+                        conflicts.append({
+                            "source": "risk_rule",
+                            "severity": "CRITICAL",
+                            "rule_name": rule.get("name", "Unnamed Rule"),
+                            "rule_id": rule.get("id"),
+                            "conflicting_values": {
+                                "list1": sorted(has_list1),
+                                "list2": sorted(has_list2),
+                            },
+                            "description": f"Violates existing SoD rule: {rule.get('name')}",
+                            "recommendation": "Split into separate bundles — one for each side of the conflict",
+                        })
+    except Exception as e:
+        logger.warning(f"SoD rule check failed (non-fatal): {e}")
+
+    # ── Check 2: Knowledge Base Toxic Pairs ─────────────────────────
+    kb_match = lookup_app_by_name(app_name) if app_name else None
+    if kb_match:
+        known_pairs = kb_match.get("known_toxic_pairs", [])
+        duty_mapping = kb_match.get("duty_mapping", {})
+
+        for pair in known_pairs:
+            pair_values = pair.get("values", [])
+            if len(pair_values) != 2:
+                continue
+            v1_lower = pair_values[0].lower() if isinstance(pair_values[0], str) else str(pair_values[0]).lower()
+            v2_lower = pair_values[1].lower() if isinstance(pair_values[1], str) else str(pair_values[1]).lower()
+            if v1_lower in all_values and v2_lower in all_values:
+                conflicts.append({
+                    "source": "knowledge_base",
+                    "severity": pair.get("severity", "HIGH"),
+                    "rule_name": pair.get("name", f"Toxic Pair: {pair_values[0]} + {pair_values[1]}"),
+                    "conflicting_values": pair_values,
+                    "risk": pair.get("risk", "Known toxic combination"),
+                    "description": f"Knowledge base: {pair.get('risk', 'Known toxic combination')}",
+                    "recommendation": "Remove one of the conflicting values from the bundle",
+                })
+
+    # ── Check 3: ISACA Duty Category Pairings ───────────────────────
+    # Map pattern values to duty categories using knowledge base
+    if kb_match:
+        duty_mapping = kb_match.get("duty_mapping", {})
+        value_duties: Dict[str, str] = {}  # value_name -> duty category
+        for val_name, duty in duty_mapping.items():
+            if val_name.lower() in all_values:
+                value_duties[val_name] = duty
+
+        # Check if any ISACA toxic duty pairs exist within this pattern
+        duties_present = set(value_duties.values())
+        for pairing in ISACA_TOXIC_PAIRINGS:
+            pair = pairing["pair"]
+            if pair[0] in duties_present and pair[1] in duties_present:
+                # Find the specific values that cause this conflict
+                duty0_values = [v for v, d in value_duties.items() if d == pair[0]]
+                duty1_values = [v for v, d in value_duties.items() if d == pair[1]]
+                # Skip if already caught by a more specific check
+                already_caught = any(
+                    c["source"] in ("risk_rule", "knowledge_base") for c in conflicts
+                    if set(c.get("conflicting_values", {}).get("list1", c.get("conflicting_values", [])))
+                    & set(v.lower() for v in duty0_values + duty1_values)
+                )
+                if not already_caught:
+                    conflicts.append({
+                        "source": "isaca",
+                        "severity": pairing["severity"],
+                        "rule_name": f"ISACA: {pair[0].title()} + {pair[1].title()} Conflict",
+                        "conflicting_values": {
+                            pair[0]: duty0_values,
+                            pair[1]: duty1_values,
+                        },
+                        "risk": pairing["risk"],
+                        "description": f"ISACA duty segregation: {pairing['risk']}",
+                        "recommendation": f"Separate {pair[0]} duties from {pair[1]} duties into different bundles",
+                        "compliance": "NIST AC-5, SOX 404, ISACA SoD",
+                    })
+
+    return conflicts
 
 
 # ============================================
@@ -806,10 +975,11 @@ def _get_app_name(app_id: str) -> str:
 # MCP Tool Functions
 # ============================================
 
-async def analyze_entitlement_patterns(args: Dict[str, Any]) -> Dict[str, Any]:
+@_json_result
+async def analyze_entitlement_patterns(args: Dict[str, Any]) -> str:
     """
     Analyze entitlement patterns for an application.
-    
+
     Discovers patterns between user profile attributes and their entitlements.
     For example: "90% of users in department=Engineering have Role=Developer"
     
@@ -953,10 +1123,25 @@ async def analyze_entitlement_patterns(args: Dict[str, Any]) -> Dict[str, Any]:
         # Combine and sort patterns
         all_patterns = single_patterns + multi_patterns
         all_patterns.sort(key=lambda p: (-p.user_count, -p.percentage))
-        
-        progress_log.append(f"\n✅ Analysis complete! Found {len(all_patterns)} total patterns")
-        
-        # Step 7: Save to cache
+
+        progress_log.append(f"\n✅ Pattern discovery complete! Found {len(all_patterns)} total patterns")
+
+        # Step 7: SoD conflict check on each pattern
+        progress_log.append("\n🛡️  Step 7: Checking patterns for SoD conflicts...")
+        patterns_with_conflicts = 0
+        for pattern in all_patterns:
+            pattern.sod_conflicts = await _check_pattern_sod_conflicts(
+                app_id, pattern.entitlements, app_name
+            )
+            if pattern.sod_conflicts:
+                patterns_with_conflicts += 1
+
+        if patterns_with_conflicts > 0:
+            progress_log.append(f"   ⚠️  {patterns_with_conflicts} pattern(s) have SoD conflicts — marked in results")
+        else:
+            progress_log.append(f"   ✅ No SoD conflicts detected in any patterns")
+
+        # Step 8: Save to cache
         analysis_data = {
             "app_id": app_id,
             "app_name": app_name,
@@ -989,6 +1174,18 @@ async def analyze_entitlement_patterns(args: Dict[str, Any]) -> Dict[str, Any]:
             # Strength indicator
             strength_emoji = {"strong": "🟢", "moderate": "🟡", "weak": "🟠"}.get(pattern.strength, "⚪")
             
+            # SoD conflict indicator
+            sod_status = "SAFE"
+            sod_detail = None
+            if pattern.sod_conflicts:
+                severities = [c.get("severity", "HIGH") for c in pattern.sod_conflicts]
+                max_severity = "CRITICAL" if "CRITICAL" in severities else "HIGH"
+                sod_status = f"CONFLICT ({max_severity})"
+                sod_detail = [
+                    {"rule": c.get("rule_name"), "severity": c.get("severity"), "recommendation": c.get("recommendation")}
+                    for c in pattern.sod_conflicts
+                ]
+
             patterns_output.append({
                 "rank": i,
                 "pattern_id": pattern.id,
@@ -996,14 +1193,18 @@ async def analyze_entitlement_patterns(args: Dict[str, Any]) -> Dict[str, Any]:
                 "entitlements": ent_str,
                 "user_count": pattern.user_count,
                 "percentage": f"{pattern.percentage}%",
-                "strength": f"{strength_emoji} {pattern.strength.capitalize()}"
+                "strength": f"{strength_emoji} {pattern.strength.capitalize()}",
+                "sod_status": sod_status,
+                "sod_conflicts": sod_detail,
             })
         
         # Summary stats
         strong_count = sum(1 for p in all_patterns if p.strength == "strong")
         moderate_count = sum(1 for p in all_patterns if p.strength == "moderate")
         weak_count = sum(1 for p in all_patterns if p.strength == "weak")
-        
+        conflict_count = sum(1 for p in all_patterns if p.sod_conflicts)
+        safe_count = len(all_patterns) - conflict_count
+
         return {
             "success": True,
             "app_name": app_name,
@@ -1015,13 +1216,16 @@ async def analyze_entitlement_patterns(args: Dict[str, Any]) -> Dict[str, Any]:
                 "strong_patterns": strong_count,
                 "moderate_patterns": moderate_count,
                 "weak_patterns": weak_count,
-                "threshold_used": f"{threshold}%"
+                "threshold_used": f"{threshold}%",
+                "sod_safe_patterns": safe_count,
+                "sod_conflict_patterns": conflict_count,
             },
             "top_patterns": patterns_output,
             "progress": progress_log,
             "next_steps": [
                 f"Use preview_bundle_creation with analysis_id='{analysis_id}' and pattern_id='<pattern_id>' to preview bundle creation",
-                f"Use create_bundle_from_pattern to create a bundle from a discovered pattern"
+                f"Patterns marked 'SAFE' can be created as bundles directly",
+                f"Patterns marked 'CONFLICT' will require acknowledgement or splitting before bundle creation"
             ]
         }
         
@@ -1034,10 +1238,11 @@ async def analyze_entitlement_patterns(args: Dict[str, Any]) -> Dict[str, Any]:
         }
 
 
-async def preview_bundle_creation(args: Dict[str, Any]) -> Dict[str, Any]:
+@_json_result
+async def preview_bundle_creation(args: Dict[str, Any]) -> str:
     """
     Preview bundle creation from a discovered pattern (dry run).
-    
+
     Shows exactly what would be created without making any changes.
     
     Args:
@@ -1109,48 +1314,78 @@ async def preview_bundle_creation(args: Dict[str, Any]) -> Dict[str, Any]:
         total_users=pattern_data["total_users"],
         percentage=pattern_data["percentage"],
         strength=pattern_data["strength"],
-        matching_user_ids=pattern_data["matching_user_ids"]
+        matching_user_ids=pattern_data["matching_user_ids"],
+        sod_conflicts=pattern_data.get("sod_conflicts"),
     )
-    
+
     app_id = cached.get("app_id")
     app_name = cached.get("app_name", "Application")
-    
+
     if not app_id:
         return {
             "success": False,
             "error": "Cached analysis is missing app_id. Please re-run analyze_entitlement_patterns."
         }
-    
+
+    # Re-check SoD conflicts (rules may have been added since analysis)
+    sod_conflicts = await _check_pattern_sod_conflicts(app_id, pattern.entitlements, app_name)
+    pattern.sod_conflicts = sod_conflicts
+
     # Generate bundle name suggestions if not provided
     if not bundle_name:
         name_suggestions = _generate_bundle_names(app_name, pattern)
         bundle_name = name_suggestions[0]  # Use first suggestion
     else:
         name_suggestions = [bundle_name]
-    
+
     # Build the payload
     payload = _build_bundle_payload(app_id, pattern, bundle_name, description, app_name)
-    
+
     # Format entitlements for display
     entitlements_display = []
     for ent_name, values in pattern.entitlements.items():
         ent_ids = pattern.entitlement_ids.get(ent_name, {})
         schema_id = ent_ids.get("_schema_id", "N/A")
-        
+
         values_display = []
         for val in values:
             val_id = ent_ids.get(val, "N/A")
             values_display.append(f"  - {val} (ID: {val_id})")
-        
+
         entitlements_display.append({
             "name": ent_name,
             "schema_id": schema_id,
             "values": values_display
         })
-    
+
     # Format attributes for display
     attr_display = " AND ".join(f"{k}={v}" for k, v in pattern.attributes.items())
-    
+
+    # Build warnings including SoD conflicts
+    warnings = _get_bundle_warnings(pattern, payload)
+
+    # Build SoD section for preview
+    sod_check_result = {"status": "SAFE", "conflicts": []}
+    if sod_conflicts:
+        sod_check_result["status"] = "CONFLICTS_DETECTED"
+        for conflict in sod_conflicts:
+            sod_check_result["conflicts"].append({
+                "source": conflict.get("source"),
+                "severity": conflict.get("severity"),
+                "rule": conflict.get("rule_name"),
+                "risk": conflict.get("description"),
+                "recommendation": conflict.get("recommendation"),
+            })
+            # Add to warnings
+            warnings.append(
+                f"SoD CONFLICT [{conflict.get('severity')}]: {conflict.get('description')} "
+                f"— {conflict.get('recommendation')}"
+            )
+
+    next_step = f"Use create_bundle_from_pattern with analysisId='{analysis_id}', patternId='{pattern_id}' to create this bundle"
+    if sod_conflicts:
+        next_step += " (pass allowSodOverride=true to create despite conflicts)"
+
     return {
         "success": True,
         "preview": {
@@ -1162,11 +1397,12 @@ async def preview_bundle_creation(args: Dict[str, Any]) -> Dict[str, Any]:
             "coverage": f"{pattern.user_count} users ({pattern.percentage}%)",
             "entitlements": entitlements_display
         },
+        "sod_check": sod_check_result,
         "name_suggestions": name_suggestions,
         "api_payload": payload,
         "api_endpoint": "POST /governance/api/v1/entitlement-bundles",
-        "warnings": _get_bundle_warnings(pattern, payload),
-        "next_step": f"Use create_bundle_from_pattern with analysisId='{analysis_id}', patternId='{pattern_id}' to create this bundle"
+        "warnings": warnings,
+        "next_step": next_step,
     }
 
 
@@ -1195,20 +1431,26 @@ def _get_bundle_warnings(pattern: Pattern, payload: Dict) -> List[str]:
     return warnings
 
 
-async def create_bundle_from_pattern(args: Dict[str, Any]) -> Dict[str, Any]:
+@_json_result
+async def create_bundle_from_pattern(args: Dict[str, Any]) -> str:
     """
-    Create an entitlement bundle from a discovered pattern.
-    
+    Create an entitlement bundle from a discovered pattern (SoD-safe).
+
     This will create a real bundle in Okta. Use preview_bundle_creation first
     to see what will be created.
-    
+
+    SoD Safety: Before creating the bundle, checks for separation of duties
+    conflicts. If conflicts are found, creation is blocked unless
+    allowSodOverride=true is passed.
+
     Args:
         analysisId (str): Required. The analysis ID from analyze_entitlement_patterns.
         patternId (str): Required. The pattern ID to create a bundle from.
         bundleName (str): Required. Name for the bundle.
         description (str): Optional. Description for the bundle.
         confirmCreation (bool): Required. Must be true to confirm bundle creation.
-    
+        allowSodOverride (bool): Optional. Set to true to create bundle despite SoD conflicts.
+
     Returns:
         The created bundle details or error information.
     """
@@ -1217,26 +1459,27 @@ async def create_bundle_from_pattern(args: Dict[str, Any]) -> Dict[str, Any]:
     bundle_name = args.get("bundleName")
     description = args.get("description")
     confirm = args.get("confirmCreation", False)
-    
+    allow_sod_override = args.get("allowSodOverride", False)
+
     # Validate required parameters
     if not analysis_id:
         return {
             "success": False,
             "error": "Missing required parameter: analysisId"
         }
-    
+
     if not pattern_id:
         return {
             "success": False,
             "error": "Missing required parameter: patternId"
         }
-    
+
     if not bundle_name:
         return {
             "success": False,
             "error": "Missing required parameter: bundleName"
         }
-    
+
     if not confirm:
         return {
             "success": False,
@@ -1257,23 +1500,23 @@ async def create_bundle_from_pattern(args: Dict[str, Any]) -> Dict[str, Any]:
             "success": False,
             "error": f"Failed to retrieve analysis cache: {str(e)[:100]}"
         }
-    
+
     # Get the actual analysis data (stored in 'data' key)
     analysis_data = cached.get("data", cached)  # Fallback to cached if no 'data' key
-    
+
     # Find the pattern
     pattern_data = None
     for p in analysis_data.get("patterns", []):
         if p.get("id") == pattern_id:
             pattern_data = p
             break
-    
+
     if not pattern_data:
         return {
             "success": False,
             "error": f"Pattern not found: {pattern_id}"
         }
-    
+
     # Reconstruct Pattern object
     pattern = Pattern(
         id=pattern_data["id"],
@@ -1284,18 +1527,45 @@ async def create_bundle_from_pattern(args: Dict[str, Any]) -> Dict[str, Any]:
         total_users=pattern_data["total_users"],
         percentage=pattern_data["percentage"],
         strength=pattern_data["strength"],
-        matching_user_ids=pattern_data["matching_user_ids"]
+        matching_user_ids=pattern_data["matching_user_ids"],
+        sod_conflicts=pattern_data.get("sod_conflicts"),
     )
-    
+
     app_id = cached.get("app_id")
     app_name = cached.get("app_name", "Application")
-    
+
     if not app_id:
         return {
             "success": False,
             "error": "Cached analysis is missing app_id. Please re-run analyze_entitlement_patterns."
         }
-    
+
+    # ── SoD Conflict Gate ───────────────────────────────────────────
+    sod_conflicts = await _check_pattern_sod_conflicts(app_id, pattern.entitlements, app_name)
+
+    if sod_conflicts and not allow_sod_override:
+        conflict_details = []
+        for c in sod_conflicts:
+            conflict_details.append({
+                "source": c.get("source"),
+                "severity": c.get("severity"),
+                "rule": c.get("rule_name"),
+                "risk": c.get("description"),
+                "recommendation": c.get("recommendation"),
+            })
+
+        return {
+            "success": False,
+            "error": "BLOCKED: Bundle would create SoD conflicts",
+            "sod_conflicts": conflict_details,
+            "resolution_options": [
+                "Split the pattern into separate bundles that don't combine conflicting values",
+                "Pass allowSodOverride=true to create the bundle despite conflicts (not recommended)",
+                "Remove the conflicting entitlement values from the bundle",
+            ],
+            "hint": "Use preview_bundle_creation to see detailed conflict analysis",
+        }
+
     # Build the payload
     payload = _build_bundle_payload(app_id, pattern, bundle_name, description, app_name)
     
@@ -1339,10 +1609,20 @@ async def create_bundle_from_pattern(args: Dict[str, Any]) -> Dict[str, Any]:
             }
         
         created_bundle = result.get("response", {})
-        
-        return {
+
+        sod_note = None
+        if sod_conflicts and allow_sod_override:
+            sod_note = {
+                "warning": "Bundle created with SoD override — conflicts were acknowledged",
+                "conflicts_overridden": len(sod_conflicts),
+                "details": [c.get("rule_name") for c in sod_conflicts],
+            }
+            logger.warning(f"Bundle '{bundle_name}' created with {len(sod_conflicts)} SoD conflict(s) overridden")
+
+        result_data = {
             "success": True,
-            "message": f"✅ Bundle '{bundle_name}' created successfully!",
+            "message": f"Bundle '{bundle_name}' created successfully!",
+            "sod_status": "OVERRIDE" if sod_note else "SAFE",
             "bundle": {
                 "id": created_bundle.get("id"),
                 "name": created_bundle.get("name"),
@@ -1358,6 +1638,9 @@ async def create_bundle_from_pattern(args: Dict[str, Any]) -> Dict[str, Any]:
             },
             "api_response": created_bundle
         }
+        if sod_note:
+            result_data["sod_override"] = sod_note
+        return result_data
         
     except Exception as e:
         logger.error(f"Bundle creation failed: {e}", exc_info=True)
@@ -1365,3 +1648,202 @@ async def create_bundle_from_pattern(args: Dict[str, Any]) -> Dict[str, Any]:
             "success": False,
             "error": f"Unexpected error during bundle creation: {str(e)[:100]}"
         }
+
+
+# ============================================
+# Direct Bundle Creation (no pattern analysis required)
+# ============================================
+
+@_json_result
+async def create_entitlement_bundle(args: Dict[str, Any]) -> str:
+    """
+    Create an entitlement bundle directly from entitlement value names.
+
+    Use this when you know which entitlements to bundle without needing
+    pattern analysis. Resolves value names to IDs, checks SoD conflicts,
+    and creates the bundle via the Okta API.
+
+    Args:
+        appId (str): Required. Okta application ID.
+        bundleName (str): Required. Name for the bundle.
+        entitlements (list): Required. List of entitlement value names to include.
+        description (str): Optional. Description for the bundle.
+        checkSod (bool): Optional. Check for SoD conflicts before creation. Default: True.
+        allowSodOverride (bool): Optional. Create despite SoD conflicts. Default: False.
+
+    Returns:
+        Created bundle details or error/conflict information.
+    """
+    app_id = args.get("appId")
+    bundle_name = args.get("bundleName")
+    value_names = args.get("entitlements", [])
+    description = args.get("description", "")
+    check_sod = args.get("checkSod", True)
+    allow_override = args.get("allowSodOverride", False)
+
+    if not app_id:
+        return {"success": False, "error": "appId is required"}
+    if not bundle_name:
+        return {"success": False, "error": "bundleName is required"}
+    if not value_names or not isinstance(value_names, list):
+        return {"success": False, "error": "entitlements must be a non-empty list of value names"}
+
+    try:
+        # Step 1: Get app info
+        app_result = await okta_client.execute_request("GET", f"/api/v1/apps/{app_id}")
+        app_name = ""
+        if app_result["success"]:
+            app_data = app_result.get("response", {})
+            app_name = app_data.get("label", app_data.get("name", ""))
+
+        # Step 2: Resolve entitlement value names to IDs
+        ent_result = await _list_entitlements_raw(app_id)
+        if not ent_result["success"]:
+            return {"success": False, "error": f"Failed to fetch entitlements: {ent_result.get('error')}"}
+
+        entitlements = ent_result.get("data", [])
+        if not entitlements:
+            return {"success": False, "error": "No entitlements found for this application"}
+
+        # Build value map: value_name -> {entitlementId, valueId, entitlementName}
+        value_map: Dict[str, Dict[str, str]] = {}
+        for ent in entitlements:
+            ent_id = ent.get("id")
+            ent_name = ent.get("name")
+            if not ent_id:
+                continue
+            values_json = await okta_iga_list_entitlement_values({"entitlementId": ent_id})
+            try:
+                values = json.loads(values_json)
+                if isinstance(values, list):
+                    for val in values:
+                        val_id = val.get("id")
+                        val_name = val.get("name", val.get("externalValue", ""))
+                        if val_name:
+                            value_map[val_name] = {
+                                "entitlementId": ent_id,
+                                "entitlementName": ent_name,
+                                "valueId": val_id,
+                                "valueName": val_name,
+                            }
+                        val_ext = val.get("externalValue", "")
+                        if val_ext and val_ext != val_name:
+                            value_map[val_ext] = {
+                                "entitlementId": ent_id,
+                                "entitlementName": ent_name,
+                                "valueId": val_id,
+                                "valueName": val_ext,
+                            }
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # Resolve requested values
+        resolved = {}  # entitlementId -> {"id": ent_id, "values": [{"id": val_id}]}
+        unresolved = []
+        pattern_ents: Dict[str, List[str]] = {}  # For SoD check: ent_name -> [value_names]
+
+        for name in value_names:
+            info = value_map.get(name)
+            if not info:
+                # Case-insensitive fallback
+                for key, val_info in value_map.items():
+                    if key.lower() == name.lower():
+                        info = val_info
+                        break
+            if info:
+                ent_id = info["entitlementId"]
+                if ent_id not in resolved:
+                    resolved[ent_id] = {"id": ent_id, "values": []}
+                resolved[ent_id]["values"].append({"id": info["valueId"]})
+                ent_name = info["entitlementName"]
+                if ent_name not in pattern_ents:
+                    pattern_ents[ent_name] = []
+                pattern_ents[ent_name].append(name)
+            else:
+                unresolved.append(name)
+
+        if unresolved:
+            return {
+                "success": False,
+                "error": f"Could not resolve {len(unresolved)} entitlement value(s)",
+                "unresolved": unresolved,
+                "available_values": sorted(value_map.keys())[:50],
+            }
+
+        if not resolved:
+            return {"success": False, "error": "No entitlement values resolved"}
+
+        # Step 3: SoD conflict check
+        sod_conflicts = []
+        if check_sod:
+            sod_conflicts = await _check_pattern_sod_conflicts(app_id, pattern_ents, app_name)
+            if sod_conflicts and not allow_override:
+                return {
+                    "success": False,
+                    "error": "BLOCKED: Bundle would create SoD conflicts",
+                    "sod_conflicts": [
+                        {
+                            "source": c.get("source"),
+                            "severity": c.get("severity"),
+                            "rule": c.get("rule_name"),
+                            "risk": c.get("description"),
+                            "recommendation": c.get("recommendation"),
+                        }
+                        for c in sod_conflicts
+                    ],
+                    "resolution_options": [
+                        "Remove conflicting values from the bundle",
+                        "Pass allowSodOverride=true to create despite conflicts",
+                        "Split into separate bundles",
+                    ],
+                }
+
+        # Step 4: Build and send API request
+        payload = {
+            "name": bundle_name,
+            "description": description[:1000] if description else f"Access bundle for {app_name}: {', '.join(value_names[:5])}",
+            "target": {
+                "externalId": app_id,
+                "type": "APPLICATION",
+            },
+            "entitlements": list(resolved.values()),
+        }
+
+        result = await okta_client.execute_request(
+            "POST", "/governance/api/v1/entitlement-bundles", body=payload
+        )
+
+        if not result["success"]:
+            error_response = result.get("response", {})
+            return {
+                "success": False,
+                "error": f"API error: {error_response.get('errorSummary', str(error_response)[:200])}",
+                "httpCode": result.get("httpCode"),
+                "attempted_payload": payload,
+            }
+
+        created = result.get("response", {})
+
+        response_data = {
+            "success": True,
+            "message": f"Bundle '{bundle_name}' created successfully!",
+            "sod_status": "OVERRIDE" if (sod_conflicts and allow_override) else "SAFE",
+            "bundle": {
+                "id": created.get("id"),
+                "name": created.get("name"),
+                "status": created.get("status"),
+                "target_app": f"{app_name} ({app_id})",
+                "entitlements_included": value_names,
+                "entitlements_count": sum(len(e["values"]) for e in resolved.values()),
+            },
+        }
+        if sod_conflicts and allow_override:
+            response_data["sod_override"] = {
+                "warning": "Bundle created with SoD override",
+                "conflicts_overridden": len(sod_conflicts),
+            }
+        return response_data
+
+    except Exception as e:
+        logger.error(f"Direct bundle creation failed: {e}", exc_info=True)
+        return {"success": False, "error": f"Unexpected error: {str(e)[:100]}"}

@@ -37,10 +37,10 @@ def safe_parse_response(response: Any, context: str = "") -> Tuple[bool, Any]:
     if response is None:
         logger.debug(f"[{context}] Response is None, returning empty list")
         return True, []
-    
+
     if isinstance(response, (list, dict)):
         return True, response
-    
+
     if isinstance(response, str):
         if not response.strip():
             logger.debug(f"[{context}] Empty string response, returning empty list")
@@ -50,8 +50,30 @@ def safe_parse_response(response: Any, context: str = "") -> Tuple[bool, Any]:
         except json.JSONDecodeError as e:
             logger.error(f"[{context}] JSON parse error: {e}. Raw content: {response[:200]}")
             return False, {"error": f"JSON parse error: {e}", "raw": response[:500]}
-    
+
     return True, response
+
+
+def escape_scim_filter_value(value: str) -> str:
+    """
+    Escape special characters in SCIM filter values to prevent filter injection.
+    SCIM filter special characters: * \\ ( )
+    Follows RFC 7644 Section 3.2.2.2
+    """
+    if not isinstance(value, str):
+        value = str(value)
+
+    # Escape backslashes first (must be first to avoid double-escaping)
+    value = value.replace("\\", "\\\\")
+
+    # Escape asterisks (wildcard character)
+    value = value.replace("*", "\\*")
+
+    # Escape parentheses
+    value = value.replace("(", "\\(")
+    value = value.replace(")", "\\)")
+
+    return value
 
 
 # ============================================
@@ -272,7 +294,9 @@ async def okta_iga_list_entitlement_values(args: Dict[str, Any]) -> str:
 async def okta_user_search(args: Dict[str, Any]) -> str:
     attr = args.get("attribute")
     val = args.get("value")
-    search_query = f'profile.{attr} eq "{val}"'
+    # Sanitize the value to prevent SCIM filter injection
+    escaped_val = escape_scim_filter_value(val)
+    search_query = f'profile.{attr} eq "{escaped_val}"'
     url = f"/api/v1/users?search={quote(search_query)}"
     
     result = await okta_client.execute_request("GET", url)
@@ -600,5 +624,74 @@ async def okta_create_app_attributes(args: Dict[str, Any]) -> str:
             "error": f"Failed to update schema: {error_msg}",
             "attempted_to_create": created,
             "httpCode": update_result.get("httpCode")
+        }, indent=2)
+
+
+async def okta_iga_list_grants_for_app(args: Dict[str, Any]) -> str:
+    """
+    List all governance grants for a specific application.
+
+    Handles the correct filter format required by the Grants API:
+        target.externalId eq "{appId}" AND target.type eq "APPLICATION"
+
+    Args:
+        appId: Required. The Okta application ID.
+        userId: Optional. Filter to grants for a specific user.
+
+    Returns:
+        JSON string with grants list.
+    """
+    app_id = args.get("appId")
+    user_id = args.get("userId")
+
+    if not app_id:
+        return json.dumps({"status": "FAILED", "error": "appId is required"})
+
+    filter_parts = [
+        f'target.externalId eq "{app_id}"',
+        'target.type eq "APPLICATION"',
+    ]
+    if user_id:
+        filter_parts.append(f'targetPrincipal.externalId eq "{user_id}"')
+        filter_parts.append('targetPrincipal.type eq "OKTA_USER"')
+
+    filter_expr = " AND ".join(filter_parts)
+    url = f"/governance/api/v1/grants?filter={quote(filter_expr)}"
+
+    result = await okta_client.execute_request("GET", url)
+
+    if result["success"]:
+        response = result.get("response", {})
+        grants = response
+        if isinstance(response, dict) and "data" in response:
+            grants = response["data"]
+
+        if not isinstance(grants, list):
+            grants = [grants] if grants else []
+
+        # Summarise
+        active = [g for g in grants if g.get("status") == "ACTIVE"]
+        unique_users = set()
+        for g in grants:
+            principal = g.get("targetPrincipal", {})
+            uid = principal.get("externalId")
+            if uid:
+                unique_users.add(uid)
+
+        return json.dumps({
+            "status": "SUCCESS",
+            "appId": app_id,
+            "total_grants": len(grants),
+            "active_grants": len(active),
+            "unique_users": len(unique_users),
+            "grants": grants,
+        }, indent=2)
+    else:
+        return json.dumps({
+            "status": "FAILED",
+            "error": result.get("response", {}).get("errorSummary", "Unknown error"),
+            "httpCode": result.get("httpCode"),
+            "filter_used": filter_expr,
+            "hint": "The Grants API filter requires target.externalId and target.type fields.",
         }, indent=2)
 

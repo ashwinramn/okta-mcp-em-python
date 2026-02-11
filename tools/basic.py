@@ -59,7 +59,7 @@ async def okta_test(args: Dict[str, Any]) -> str:
 
     # 2. Call /api/v1/users/me
     result = await okta_client.execute_request("GET", "/api/v1/users/me")
-    
+
     if not result["success"]:
         return json.dumps({
             "success": False,
@@ -71,7 +71,7 @@ async def okta_test(args: Dict[str, Any]) -> str:
                 "tokenPreview": f"***{okta_client.token[-4:] if okta_client.token else 'None'}"
             }
         }, indent=2)
-    
+
     user_info = result["response"]
     profile = user_info.get("profile", {})
     
@@ -159,32 +159,26 @@ async def okta_test(args: Dict[str, Any]) -> str:
     else:
         csv_msg = "      (None found locally)"
 
-    # New guided workflow menu
-    next_step = (
-        "\n\n✅ **Ready to go!**"
-        "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        "\n\n➡️  **Next:** Call `show_workflow_menu` to see available workflows"
-        "\n\n   Or tell me what you'd like to do:"
-        "\n   • \"Import a CSV file\" → CSV Import workflow"
-        "\n   • \"Create bundles from existing access\" → Pattern Mining workflow"
-    )
+    # Fetch live dashboard menu
+    from tools import menu as _menu
+    menu_result_str = await _menu.show_workflow_menu({})
 
     return json.dumps({
         "success": True,
-        "message": f"✅ Okta tenant connected successfully!{s3_instructions}{next_step}",
+        "message": f"Okta tenant connected successfully!{s3_instructions}",
         "details": {
             "okta": {
                 "domain": okta_client.domain,
                 "user": profile.get("email") or profile.get("login") or "authenticated",
                 "status": user_info.get("status", "active"),
-                "tokenPreview": f"***{okta_client.token[-4:]}"
             },
             "s3": {
                 "status": s3_status,
                 **s3_details
             },
             "local_csv_files": len(local_files)
-        }
+        },
+        "menu": json.loads(menu_result_str)
     }, indent=2)
 
 async def list_csv_files(args: Dict[str, Any]) -> str:
@@ -231,7 +225,32 @@ def get_csv_path(file_identifier: str) -> Optional[Path]:
     """
     import logging
     logger = logging.getLogger("okta_mcp")
-    
+
+    def _is_safe_path(resolved_path: Path, base_path: Path) -> bool:
+        """
+        Verify that resolved_path is within base_path (no directory traversal).
+        Returns True only if resolved_path is within base_path hierarchy.
+        """
+        try:
+            # Resolve both paths to absolute, normalized form
+            resolved_abs = resolved_path.resolve()
+            base_abs = base_path.resolve()
+
+            # Check if resolved path is within base path
+            resolved_abs.relative_to(base_abs)
+            return True
+        except ValueError:
+            # relative_to raises ValueError if not under base_path
+            return False
+
+    # Sanitize filename to prevent directory traversal
+    file_identifier = file_identifier.strip()
+
+    # Block obvious traversal attempts
+    if ".." in file_identifier or file_identifier.startswith("/"):
+        logger.warning(f"Blocked suspicious path identifier: {file_identifier}")
+        return None
+
     if file_identifier.isdigit():
         idx = int(file_identifier) - 1
         files = sorted([f for f in CSV_FOLDER.glob("*.csv") if f.is_file()])
@@ -241,7 +260,11 @@ def get_csv_path(file_identifier: str) -> Optional[Path]:
     # Check direct path first
     potential_path = CSV_FOLDER / file_identifier
     if potential_path.exists() and potential_path.is_file():
-        return potential_path
+        if _is_safe_path(potential_path, CSV_FOLDER):
+            return potential_path
+        else:
+            logger.warning(f"Blocked path traversal attempt: {potential_path}")
+            return None
     
     # Add .csv extension if not present
     if not file_identifier.lower().endswith(".csv"):
@@ -251,28 +274,45 @@ def get_csv_path(file_identifier: str) -> Optional[Path]:
     
     potential_path = CSV_FOLDER / file_identifier_csv
     if potential_path.exists() and potential_path.is_file():
-        return potential_path
-    
+        if _is_safe_path(potential_path, CSV_FOLDER):
+            return potential_path
+        else:
+            logger.warning(f"Blocked path traversal attempt: {potential_path}")
+            return None
+
     # Search recursively in all subdirectories
     for match in CSV_FOLDER.rglob(file_identifier_csv):
         if match.is_file():
-            logger.info(f"Found CSV in subdirectory: {match}")
-            return match
+            if _is_safe_path(match, CSV_FOLDER):
+                logger.info(f"Found CSV in subdirectory: {match}")
+                return match
+            else:
+                logger.warning(f"Blocked path traversal attempt: {match}")
+                continue  # Skip to next match
     
     # Also try without extension in subdirectories
     if file_identifier != file_identifier_csv:
         for match in CSV_FOLDER.rglob(file_identifier):
             if match.is_file():
-                logger.info(f"Found CSV in subdirectory: {match}")
-                return match
-    
+                if _is_safe_path(match, CSV_FOLDER):
+                    logger.info(f"Found CSV in subdirectory: {match}")
+                    return match
+                else:
+                    logger.warning(f"Blocked path traversal attempt: {match}")
+                    continue  # Skip to next match
+
     # Try S3 download as last resort
     if s3_client.enabled:
         logger.info(f"File {file_identifier_csv} not found locally, attempting S3 download")
         import asyncio
         success = asyncio.run(s3_client.download_file(file_identifier_csv, CSV_FOLDER / file_identifier_csv))
         if success:
-            return CSV_FOLDER / file_identifier_csv
+            downloaded_path = CSV_FOLDER / file_identifier_csv
+            if _is_safe_path(downloaded_path, CSV_FOLDER):
+                return downloaded_path
+            else:
+                logger.warning(f"Downloaded file is outside CSV folder: {downloaded_path}")
+                return None
     
     return None
 

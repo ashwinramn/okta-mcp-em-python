@@ -16,7 +16,34 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from tools import basic, api, batch, workflow, bundle, menu
+from tools import basic, api, batch, workflow, bundle, menu, sod, governance
+
+def validate_environment_variables() -> None:
+    """
+    Validate required environment variables before MCP server starts.
+    Exits with code 1 if validation fails.
+    """
+    import logging
+    logger = logging.getLogger("okta_mcp")
+
+    okta_domain = os.environ.get("OKTA_DOMAIN")
+    okta_token = os.environ.get("OKTA_API_TOKEN")
+
+    if not okta_domain:
+        logger.error("CRITICAL: OKTA_DOMAIN environment variable is not set")
+        print("❌ ERROR: OKTA_DOMAIN environment variable is required")
+        print("Create a .env file with: OKTA_DOMAIN=your-domain.okta.com")
+        sys.exit(1)
+
+    if not okta_token:
+        logger.error("CRITICAL: OKTA_API_TOKEN environment variable is not set")
+        print("❌ ERROR: OKTA_API_TOKEN environment variable is required")
+        print("Create a .env file with: OKTA_API_TOKEN=your-api-token")
+        sys.exit(1)
+
+    logger.info(f"Environment validation passed: OKTA_DOMAIN={okta_domain}")
+
+validate_environment_variables()
 
 # Initialize FastMCP
 mcp = FastMCP("okta-mcp-em-python")
@@ -148,6 +175,22 @@ async def okta_iga_create_custom_grant(grantBody: Dict[str, Any]) -> str:
 async def okta_iga_list_grants(filter: str) -> str:
     """List grants for a user/app using a filter expression."""
     return await api.okta_iga_list_grants({"filter": filter})
+
+@mcp.tool()
+async def okta_iga_list_grants_for_app(appId: str, userId: str = None) -> str:
+    """
+    List all governance grants for a specific application.
+
+    This tool handles the correct filter format for the Grants API automatically.
+    No need to construct filter expressions manually.
+
+    Args:
+        appId: Required. The Okta application ID.
+        userId: Optional. Filter to a specific user's grants.
+
+    Returns: JSON with grants list, counts, and unique user stats.
+    """
+    return await api.okta_iga_list_grants_for_app({"appId": appId, "userId": userId})
 
 @mcp.tool()
 async def okta_get_rate_status() -> str:
@@ -414,30 +457,249 @@ async def create_bundle_from_pattern(
     patternId: str,
     bundleName: str,
     description: str = None,
-    confirmCreation: bool = False
+    confirmCreation: bool = False,
+    allowSodOverride: bool = False
 ) -> str:
     """
-    Create an entitlement bundle from a discovered pattern.
-    
+    Create an entitlement bundle from a discovered pattern (SoD-safe).
+
     This will create a real bundle in Okta. Use preview_bundle_creation first
     to see what will be created.
-    
+
+    SoD SAFETY: Before creating the bundle, this tool checks for separation of
+    duties conflicts against existing risk rules, the knowledge base, and ISACA
+    duty category pairings. If conflicts are found, creation is BLOCKED unless
+    allowSodOverride=true is explicitly passed.
+
     Args:
         analysisId: Required. The analysis ID from analyze_entitlement_patterns.
         patternId: Required. The pattern ID to create a bundle from.
         bundleName: Required. Name for the bundle.
         description: Optional. Description for the bundle.
         confirmCreation: Required. Must be true to confirm bundle creation.
-    
-    Returns the created bundle details or error information.
+        allowSodOverride: Optional. Set to true to create bundle despite SoD conflicts.
+            Default: false. When true, the bundle is created but logged as an override.
+
+    Returns the created bundle details, SoD check status, or conflict details if blocked.
     """
     return await bundle.create_bundle_from_pattern({
         "analysisId": analysisId,
         "patternId": patternId,
         "bundleName": bundleName,
         "description": description,
-        "confirmCreation": confirmCreation
+        "confirmCreation": confirmCreation,
+        "allowSodOverride": allowSodOverride,
     })
+
+
+@mcp.tool()
+async def create_entitlement_bundle(
+    appId: str,
+    bundleName: str,
+    entitlements: list,
+    description: str = "",
+    checkSod: bool = True,
+    allowSodOverride: bool = False
+) -> str:
+    """
+    Create an entitlement bundle directly from entitlement value names.
+
+    Use this when you know which entitlements to bundle together without needing
+    pattern analysis first. Resolves entitlement value names to IDs, checks for
+    SoD conflicts, and creates the bundle via the Okta API.
+
+    Args:
+        appId: Required. Okta application ID.
+        bundleName: Required. Name for the bundle.
+        entitlements: Required. List of entitlement value names to include.
+        description: Optional. Description for the bundle.
+        checkSod: Optional. Check for SoD conflicts before creation. Default: true.
+        allowSodOverride: Optional. Create despite SoD conflicts. Default: false.
+
+    Returns the created bundle details or error/conflict information.
+    """
+    return await bundle.create_entitlement_bundle({
+        "appId": appId,
+        "bundleName": bundleName,
+        "entitlements": entitlements,
+        "description": description,
+        "checkSod": checkSod,
+        "allowSodOverride": allowSodOverride,
+    })
+
+
+# ===========================================
+# SEPARATION OF DUTIES (SoD) TOOLS
+# ===========================================
+
+@mcp.tool()
+async def analyze_sod_context(appId: str) -> str:
+    """
+    Gather SoD analysis context for an application.
+
+    Returns structured data for LLM to analyze separation of duties risks:
+    - Application info (name, label, status)
+    - All entitlements and their values
+    - Known toxic patterns from knowledge base (if app is recognized)
+    - ISACA duty categories and toxic pairing rules
+    - Compliance framework references (NIST AC-5, SOX 404, SOC2)
+
+    The LLM uses this context to:
+    1. Map entitlement values to duty categories (authorization, custody, recording, verification)
+    2. Identify toxic combinations using ISACA rules
+    3. Cross-reference with known patterns for the app type
+    4. Recommend SoD rules with compliance justification
+
+    Args:
+        appId: Required. The Okta application ID to analyze.
+
+    After analysis, use create_sod_risk_rule to create enforcement rules.
+    """
+    return await sod.analyze_sod_context({"appId": appId})
+
+
+@mcp.tool()
+async def create_sod_risk_rule(
+    appId: str,
+    ruleName: str,
+    list1: List[str],
+    list2: List[str],
+    description: str = "",
+    notes: str = ""
+) -> str:
+    """
+    Create an Okta IGA Risk Rule for separation of duties enforcement.
+
+    API: POST /governance/api/v1/risk-rules
+    API Doc: https://developer.okta.com/docs/api/iga/openapi/governance.api/tag/Risk-Rules/#tag/Risk-Rules/operation/createRiskRule
+
+    This tool automatically:
+    1. Retrieves the app ORN (required for resources array)
+    2. Resolves value names to entitlement IDs
+    3. Builds the correct ENTITLEMENTS-shaped conflictCriteria
+    4. Creates the rule with type: "SEPARATION_OF_DUTIES"
+
+    Args:
+        appId: Required. Okta application ID.
+        ruleName: Required. Name for the SoD rule (e.g., "Admin + Auditor Conflict").
+        list1: Required. First list of entitlement value names that conflict with list2.
+        list2: Required. Second list of entitlement value names that conflict with list1.
+        description: Longer compliance text explaining the risk (SOX, NIST AC-5, etc.).
+        notes: Short UI-friendly audit note (what the requester sees).
+
+    Example:
+        create_sod_risk_rule(
+            appId="0oa123abc",
+            ruleName="Admin + Action Write Conflict",
+            list1=["admin"],
+            list2=["action_write_enabled"],
+            description="Admin approval + ability to write actions enables approval+execution. Compliance: NIST AC-5 / ISACA.",
+            notes="Admin plus action-write lets one person approve and execute changes."
+        )
+    """
+    return await sod.create_sod_risk_rule({
+        "appId": appId,
+        "ruleName": ruleName,
+        "description": description,
+        "notes": notes,
+        "list1": list1,
+        "list2": list2
+    })
+
+
+@mcp.tool()
+async def list_sod_risk_rules(appId: str = None) -> str:
+    """
+    List existing SoD Risk Rules.
+
+    Args:
+        appId: Optional. Filter rules by application ID.
+
+    Returns list of Risk Rules with their configuration.
+    """
+    return await sod.list_sod_risk_rules({"appId": appId})
+
+
+@mcp.tool()
+async def get_entitlement_ids_for_values(appId: str, valueNames: List[str]) -> str:
+    """
+    Resolve entitlement value names to their IDs for use in API calls.
+
+    Use this helper when you need to construct Risk Rule API calls manually
+    via execute_okta_api_call. It returns the entitlementId, entitlementName,
+    valueId, and valueName for each value name.
+
+    Args:
+        appId: Required. Okta application ID.
+        valueNames: Required. List of entitlement value names to resolve.
+
+    Returns:
+        JSON mapping of value names to their full info (IDs and names).
+
+    Example:
+        get_entitlement_ids_for_values(
+            appId="0oa123abc",
+            valueNames=["admin", "action_write_enabled"]
+        )
+    """
+    return await sod.get_entitlement_ids_for_values({
+        "appId": appId,
+        "valueNames": valueNames
+    })
+
+
+@mcp.tool()
+async def test_sod_risk_rule(userId: str, appId: str = None) -> str:
+    """
+    Test Risk Rules by running a risk assessment for a user.
+
+    API: POST /governance/api/v1/risk-rule-assessments
+
+    This generates a risk assessment to verify if any rules detect
+    SoD conflicts for a specific user.
+
+    Args:
+        userId: Required. Okta user ID to assess.
+        appId: Optional. Filter assessment to specific application.
+
+    Returns:
+        JSON with risk assessment results. Check 'violations' array
+        for any SoD conflicts detected.
+    """
+    return await sod.test_sod_risk_rule({
+        "userId": userId,
+        "appId": appId
+    })
+
+
+# ===========================================
+# GOVERNANCE SUMMARY TOOLS
+# ===========================================
+
+@mcp.tool()
+async def generate_governance_summary(appId: str) -> str:
+    """
+    Generate a comprehensive governance posture report and scorecard for an application.
+
+    This is a one-shot tool that pulls data from multiple Okta APIs and produces:
+    - Entitlement inventory (schemas, values, types)
+    - Access grant statistics (total grants, active, unique users)
+    - Separation of Duties coverage (rules created vs toxic pairs known)
+    - Bundle/role-based access adoption ratio
+    - Compliance readiness checks (NIST AC-5, SOX 404, SOC2 CC6.1, CC6.3)
+    - Overall governance score (0-100) with letter grade
+    - Prioritized recommendations for improvement
+
+    Use this after completing a workflow (CSV import, pattern mining, or SoD analysis)
+    to show the governance posture improvement. Ideal for before/after comparisons.
+
+    Args:
+        appId: Required. The Okta application ID to assess.
+
+    Returns:
+        Formatted governance scorecard with metrics, compliance status, and next steps.
+    """
+    return await governance.generate_governance_summary({"appId": appId})
 
 
 def main():

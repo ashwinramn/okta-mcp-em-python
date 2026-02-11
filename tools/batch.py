@@ -10,6 +10,7 @@ from urllib.parse import quote
 
 from client import okta_client, tracker
 from batch import ParallelEngine, BatchedTask
+from tools.api import escape_scim_filter_value
 
 logger = logging.getLogger("okta_mcp")
 
@@ -31,7 +32,8 @@ async def okta_batch_user_search(args: Dict[str, Any]) -> str:
             continue
         
         async def execute_search(attr=attr, val=val):
-            search_query = f'profile.{attr} eq "{val}"'
+            escaped_val = escape_scim_filter_value(val)
+            search_query = f'profile.{attr} eq "{escaped_val}"'
             url = f"/api/v1/users?search={quote(search_query)}"
             result = await okta_client.execute_request("GET", url)
             

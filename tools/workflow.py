@@ -85,9 +85,35 @@ async def analyze_csv_for_entitlements(args: Dict[str, Any]) -> str:
         return json.dumps({"status": "FAILED", "error": f"File not found: {filename}"})
     
     import pandas as pd
-    
+
     try:
-        df = pd.read_csv(filepath, dtype=str).fillna("")
+        # File validation
+        if not filepath.exists():
+            return json.dumps({"status": "FAILED", "error": f"File not found: {filepath}"})
+
+        if not filepath.is_file():
+            return json.dumps({"status": "FAILED", "error": f"Path is not a file: {filepath}"})
+
+        # Read CSV with error handling
+        try:
+            df = pd.read_csv(filepath, dtype=str, on_bad_lines='skip', engine='c').fillna("")
+        except pd.errors.ParserError as pe:
+            logger.error(f"CSV parsing error: {pe}")
+            return json.dumps({
+                "status": "FAILED",
+                "error": f"Invalid CSV format: {str(pe)[:100]}"
+            })
+        except FileNotFoundError:
+            return json.dumps({"status": "FAILED", "error": f"File not found: {filepath}"})
+        except Exception as e:
+            logger.error(f"Error reading CSV: {e}", exc_info=True)
+            return json.dumps({"status": "FAILED", "error": f"Failed to read CSV: {str(e)[:100]}"})
+
+        if df.empty:
+            return json.dumps({"status": "FAILED", "error": "CSV file is empty"})
+
+        if len(df.columns) == 0:
+            return json.dumps({"status": "FAILED", "error": "CSV has no columns"})
         
         # Known user profile columns (lookup only - do NOT create)
         USER_PROFILE_COLUMNS = {
@@ -332,8 +358,11 @@ async def analyze_csv_for_entitlements(args: Dict[str, Any]) -> str:
         return "\n".join(output_lines)
 
     except Exception as e:
-        logger.error(f"CSV analysis failed: {e}", exc_info=True)
-        return f"❌ FAILED: Error analyzing CSV: {str(e)}"
+        logger.error(f"CSV analysis failed with unexpected error: {e}", exc_info=True)
+        return json.dumps({
+            "status": "FAILED",
+            "error": f"Unexpected error during CSV analysis: {str(e)[:100]}"
+        })
 
 
 # ============================================
@@ -426,9 +455,22 @@ async def prepare_entitlement_structure(args: Dict[str, Any]) -> str:
         return json.dumps({"status": "FAILED", "error": "No entitlements found in cached CSV data"})
     
     try:
+        # Validate app_id format
+        if not isinstance(app_id, str) or len(app_id.strip()) == 0:
+            return json.dumps({"status": "FAILED", "error": "App ID must be a non-empty string"})
+
         logger.info(f"Checking existing entitlements for app {app_id}")
-        
-        existing_ents_json = await api.okta_iga_list_entitlements({"appId": app_id})
+
+        # API call with error handling
+        try:
+            existing_ents_json = await api.okta_iga_list_entitlements({"appId": app_id})
+        except Exception as api_err:
+            logger.error(f"API call failed: {api_err}", exc_info=True)
+            return json.dumps({
+                "status": "FAILED",
+                "error": f"Failed to fetch entitlements from Okta: {str(api_err)[:100]}"
+            })
+
         success, existing_ents = safe_json_loads(existing_ents_json, "list_entitlements")
         
         if not success:
@@ -543,7 +585,10 @@ async def prepare_entitlement_structure(args: Dict[str, Any]) -> str:
     
     except Exception as e:
         logger.error(f"Entitlement structure preparation failed: {e}", exc_info=True)
-        return f"❌ FAILED: {str(e)}"
+        return json.dumps({
+            "status": "FAILED",
+            "error": f"Unexpected error: {str(e)[:100]}"
+        })
 
 
 async def _create_entitlement_structure(
@@ -898,13 +943,22 @@ async def execute_user_grants(args: Dict[str, Any]) -> str:
     try:
         # STEP 1: Collect all entitlement IDs upfront
         progress.append(f"[1/4] Collecting entitlement IDs for app {app_id}")
-        
-        ent_data = await collect_app_entitlement_ids(app_id)
-        
+
+        try:
+            ent_data = await collect_app_entitlement_ids(app_id)
+        except Exception as step1_err:
+            logger.error(f"Step 1 failed: {step1_err}", exc_info=True)
+            return json.dumps({
+                "status": "FAILED",
+                "error": f"Failed to collect entitlements: {str(step1_err)[:100]}",
+                "progress": progress
+            })
+
         if not ent_data["success"]:
             return json.dumps({
                 "status": "FAILED",
-                "error": ent_data.get("error", "Failed to collect entitlement IDs")
+                "error": ent_data.get("error", "Failed to collect entitlement IDs"),
+                "progress": progress
             })
         
         ent_id_map = ent_data["ent_id_map"]
@@ -917,19 +971,28 @@ async def execute_user_grants(args: Dict[str, Any]) -> str:
         
         # STEP 2: Search for users in Okta
         progress.append(f"[2/4] Searching for {len(unique_users)} users in Okta (concurrent)")
-        
-        search_inputs = [{"attribute": "email", "value": email} for email in unique_users]
-        
-        search_result_str = await batch.okta_batch_user_search({
-            "searches": search_inputs,
-            "concurrency": 10
-        })
-        success, search_result = safe_json_loads(search_result_str, "batch_user_search")
-        
-        if not success:
+
+        try:
+            search_inputs = [{"attribute": "email", "value": email} for email in unique_users]
+
+            search_result_str = await batch.okta_batch_user_search({
+                "searches": search_inputs,
+                "concurrency": 10
+            })
+            success, search_result = safe_json_loads(search_result_str, "batch_user_search")
+
+            if not success:
+                return json.dumps({
+                    "status": "FAILED",
+                    "error": f"User search failed: {search_result.get('error', 'Unknown')}",
+                    "progress": progress
+                })
+        except Exception as step2_err:
+            logger.error(f"Step 2 failed: {step2_err}", exc_info=True)
             return json.dumps({
                 "status": "FAILED",
-                "error": f"User search failed: {search_result.get('error', 'Unknown')}"
+                "error": f"Failed to search users: {str(step2_err)[:100]}",
+                "progress": progress
             })
         
         found_users = {item['value']: item['userId'] for item in search_result.get('found', [])}
@@ -965,20 +1028,28 @@ async def execute_user_grants(args: Dict[str, Any]) -> str:
         
         # STEP 3: Assign users to application
         progress.append(f"[3/4] Assigning {len(found_users)} users to application (concurrent)")
-        
-        user_ids_to_assign = list(found_users.values())
-        
-        assign_result_str = await batch.okta_batch_assign_users({
-            "appId": app_id,
-            "userIds": user_ids_to_assign,
-            "concurrency": 10
-        })
-        success, assign_result = safe_json_loads(assign_result_str, "batch_assign_users")
-        
-        if not success:
+
+        try:
+            user_ids_to_assign = list(found_users.values())
+
+            assign_result_str = await batch.okta_batch_assign_users({
+                "appId": app_id,
+                "userIds": user_ids_to_assign,
+                "concurrency": 10
+            })
+            success, assign_result = safe_json_loads(assign_result_str, "batch_assign_users")
+
+            if not success:
+                return json.dumps({
+                    "status": "FAILED",
+                    "error": f"User assignment failed: {assign_result.get('error', 'Unknown')}",
+                    "progress": progress
+                })
+        except Exception as step3_err:
+            logger.error(f"Step 3 failed: {step3_err}", exc_info=True)
             return json.dumps({
                 "status": "FAILED",
-                "error": f"User assignment failed: {assign_result.get('error', 'Unknown')}",
+                "error": f"Failed to assign users: {str(step3_err)[:100]}",
                 "progress": progress
             })
         
@@ -997,62 +1068,106 @@ async def execute_user_grants(args: Dict[str, Any]) -> str:
         
         # STEP 4: Build and execute grant requests
         progress.append("[4/4] Building grant requests from CSV data")
-        
-        # Group grants by user to consolidate multiple entitlements per user
-        user_grants = {}  # {user_id: {entitlement_id: [value_ids]}}
-        skipped = []
-        
-        with open(filepath, 'r', encoding='utf-8-sig') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                effective_access = row.get("Effective_Access", "Permitted")
-                if effective_access != "Permitted":
-                    continue
-                    
-                email = row.get(email_col, "").strip()
-                if not email or email not in found_users:
-                    continue
-                
-                user_id = found_users[email]
-                
-                if user_id not in user_grants:
-                    user_grants[user_id] = {}
-                
-                # Process each entitlement column for this user
-                for ent_name in csv_entitlements.keys():
-                    values_str = row.get(ent_name, "")
-                    if not values_str:
+
+        try:
+            # Validate filepath before opening
+            filepath_obj = Path(filepath)
+            if not filepath_obj.exists():
+                return json.dumps({
+                    "status": "FAILED",
+                    "error": f"CSV file no longer exists: {filepath}",
+                    "progress": progress
+                })
+
+            # Group grants by user to consolidate multiple entitlements per user
+            user_grants = {}  # {user_id: {entitlement_id: [value_ids]}}
+            skipped = []
+
+            with open(filepath, 'r', encoding='utf-8-sig') as f:
+                reader = csv.DictReader(f)
+                if not reader.fieldnames:
+                    return json.dumps({
+                        "status": "FAILED",
+                        "error": "CSV has no column headers",
+                        "progress": progress
+                    })
+                for row in reader:
+                    effective_access = row.get("Effective_Access", "Permitted")
+                    if effective_access != "Permitted":
                         continue
-                    
-                    ent_id = ent_id_map.get(ent_name)
-                    if not ent_id:
-                        skipped.append({"email": email, "entitlement": ent_name, "reason": "entitlement_not_found"})
+
+                    email = row.get(email_col, "").strip()
+                    if not email or email not in found_users:
                         continue
-                    
-                    # Split comma-separated values
-                    for val in values_str.split(","):
-                        val = val.strip()
-                        if not val:
+
+                    user_id = found_users[email]
+
+                    if user_id not in user_grants:
+                        user_grants[user_id] = {}
+
+                    # Process each entitlement column for this user
+                    for ent_name in csv_entitlements.keys():
+                        values_str = row.get(ent_name, "")
+                        if not values_str:
                             continue
-                        
-                        # Get the value ID
-                        value_id = ent_value_map.get(ent_name, {}).get(val)
-                        if not value_id:
-                            skipped.append({
-                                "email": email, 
-                                "entitlement": ent_name, 
-                                "value": val,
-                                "reason": "entitlement_value_not_found"
-                            })
+
+                        ent_id = ent_id_map.get(ent_name)
+                        if not ent_id:
+                            skipped.append({"email": email, "entitlement": ent_name, "reason": "entitlement_not_found"})
                             continue
-                        
-                        # Add to user's entitlements
-                        if user_id not in user_grants:
-                            user_grants[user_id] = {}
-                        if ent_id not in user_grants[user_id]:
-                            user_grants[user_id][ent_id] = []
-                        user_grants[user_id][ent_id].append(value_id)
-        
+
+                        # Split comma-separated values
+                        for val in values_str.split(","):
+                            val = val.strip()
+                            if not val:
+                                continue
+
+                            # Get the value ID
+                            value_id = ent_value_map.get(ent_name, {}).get(val)
+                            if not value_id:
+                                skipped.append({
+                                    "email": email,
+                                    "entitlement": ent_name,
+                                    "value": val,
+                                    "reason": "entitlement_value_not_found"
+                                })
+                                continue
+
+                            # Add to user's entitlements
+                            if user_id not in user_grants:
+                                user_grants[user_id] = {}
+                            if ent_id not in user_grants[user_id]:
+                                user_grants[user_id][ent_id] = []
+                            user_grants[user_id][ent_id].append(value_id)
+
+        except FileNotFoundError:
+            return json.dumps({
+                "status": "FAILED",
+                "error": f"CSV file not found: {filepath}",
+                "progress": progress
+            })
+        except (IOError, OSError) as io_err:
+            logger.error(f"Error reading CSV: {io_err}", exc_info=True)
+            return json.dumps({
+                "status": "FAILED",
+                "error": f"Failed to read CSV: {str(io_err)[:100]}",
+                "progress": progress
+            })
+        except csv.Error as csv_err:
+            logger.error(f"CSV parsing error: {csv_err}")
+            return json.dumps({
+                "status": "FAILED",
+                "error": f"CSV parsing error: {str(csv_err)[:100]}",
+                "progress": progress
+            })
+        except Exception as step4_err:
+            logger.error(f"Step 4 failed: {step4_err}", exc_info=True)
+            return json.dumps({
+                "status": "FAILED",
+                "error": f"Failed to build grants: {str(step4_err)[:100]}",
+                "progress": progress
+            })
+
         # Build grant requests - one grant per user with all their entitlements
         grant_inputs = []
         
@@ -1097,7 +1212,7 @@ async def execute_user_grants(args: Dict[str, Any]) -> str:
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             )
         
-        progress.append(f"[6/6] Creating {len(grant_inputs)} grants (concurrent, rate-limited)")
+        progress.append(f"[4/4] Creating {len(grant_inputs)} grants (concurrent, rate-limited)")
         
         grant_result_str = await batch.okta_batch_create_grants({
             "grants": grant_inputs,
@@ -1223,8 +1338,12 @@ async def execute_user_grants(args: Dict[str, Any]) -> str:
         return "\n".join(output_lines)
     
     except Exception as e:
-        logger.error(f"User grants failed: {e}", exc_info=True)
-        return f"❌ FAILED: {str(e)}\n\nProgress:\n" + "\n".join(progress)
+        logger.error(f"User grants failed with unexpected error: {e}", exc_info=True)
+        return json.dumps({
+            "status": "FAILED",
+            "error": f"Unexpected error: {str(e)[:100]}",
+            "progress": progress
+        })
 
 
 # ============================================
