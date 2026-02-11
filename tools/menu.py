@@ -273,19 +273,22 @@ def _format_dashboard(stats: Dict[str, Any]) -> str:
       "I have a spreadsheet of who              Analyze --> Structure --> Grant
        has access in our old system"
 
-  [2] DISCOVER & CREATE ROLES              Patterns --> SoD Check --> Bundles
-      "Build role-based access from             Analyze --> Conflict Check
-       existing patterns - SoD-safe"             --> Preview --> Create
+  [2] GOVERNANCE SCORECARD                       Full Posture Report
+      "How well-governed is this app?            Score 0-100 + Compliance
+       Show me what's missing"
 
   [3] ENFORCE COMPLIANCE                         Analysis --> Risk Rules
       "Find toxic combinations and               ISACA + NIST AC-5 + SOX 404
        create separation of duties rules"
 
-  [4] GOVERNANCE SCORECARD                       Full Posture Report
-      "How well-governed is this app?            Score 0-100 + Compliance
-       Show me what's missing"
+  [4] DISCOVER & CREATE ROLES              Patterns --> SoD Check --> Bundles
+      "Build role-based access from             Analyze --> Conflict Check
+       existing patterns - SoD-safe"             --> Preview --> Create
 
   ──────────────────────────────────────────────────────────────────────────
+  TIP: If the app already has entitlements, start with [2] Governance
+  Scorecard to see your current posture before making changes.
+
   Select 1-4, or describe what you need in plain English.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
     return menu.strip()
@@ -367,10 +370,10 @@ async def show_workflow_menu(args: Dict[str, Any]) -> str:
                 "first_step": "list_csv_files"
             },
             "2": {
-                "id": "role_discovery",
-                "name": WORKFLOWS["role_discovery"]["name"],
-                "description": WORKFLOWS["role_discovery"]["description"],
-                "first_step": "Enter App ID or search for app"
+                "id": "governance_report",
+                "name": WORKFLOWS["governance_report"]["name"],
+                "description": WORKFLOWS["governance_report"]["description"],
+                "first_step": "generate_governance_summary"
             },
             "3": {
                 "id": "sod_enforcement",
@@ -379,13 +382,14 @@ async def show_workflow_menu(args: Dict[str, Any]) -> str:
                 "first_step": "analyze_sod_context"
             },
             "4": {
-                "id": "governance_report",
-                "name": WORKFLOWS["governance_report"]["name"],
-                "description": WORKFLOWS["governance_report"]["description"],
-                "first_step": "generate_governance_summary"
+                "id": "role_discovery",
+                "name": WORKFLOWS["role_discovery"]["name"],
+                "description": WORKFLOWS["role_discovery"]["description"],
+                "first_step": "Enter App ID or search for app"
             }
         },
-        "instructions": "Type '1' to import CSV data, '2' to discover and create roles (SoD-safe), '3' to enforce compliance, '4' for a governance scorecard, or describe what you need."
+        "recommendation": "If the application already has entitlements, start with option 2 (Governance Scorecard) to assess your current posture before making changes.",
+        "instructions": "Type '1' to import CSV data, '2' for a governance scorecard (recommended if app already has entitlements), '3' to enforce compliance, '4' to discover and create roles, or describe what you need."
     }, indent=2)
 
 
