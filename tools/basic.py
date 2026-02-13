@@ -183,13 +183,21 @@ async def okta_test(args: Dict[str, Any]) -> str:
 
 async def list_csv_files(args: Dict[str, Any]) -> str:
     ensure_dirs()
-    
-    local_files = sorted([f for f in os.listdir(CSV_FOLDER) if f.endswith(".csv")])
-    
+
+    # Walk subdirectories to find all local CSVs, returning paths relative to CSV_FOLDER
+    local_files = sorted([
+        str(p.relative_to(CSV_FOLDER))
+        for p in CSV_FOLDER.rglob("*.csv")
+        if p.is_file()
+        and "processed" not in p.relative_to(CSV_FOLDER).parts
+        and "test_data" not in p.relative_to(CSV_FOLDER).parts
+        and "analysis_cache" not in p.relative_to(CSV_FOLDER).parts
+    ])
+
     s3_files = []
     if s3_client.enabled:
         s3_files = await s3_client.list_csv_files()
-    
+
     all_files = sorted(set(local_files + s3_files))
     
     if not all_files:
@@ -253,7 +261,13 @@ def get_csv_path(file_identifier: str) -> Optional[Path]:
 
     if file_identifier.isdigit():
         idx = int(file_identifier) - 1
-        files = sorted([f for f in CSV_FOLDER.glob("*.csv") if f.is_file()])
+        files = sorted([
+            p for p in CSV_FOLDER.rglob("*.csv")
+            if p.is_file()
+            and "processed" not in p.relative_to(CSV_FOLDER).parts
+            and "test_data" not in p.relative_to(CSV_FOLDER).parts
+            and "analysis_cache" not in p.relative_to(CSV_FOLDER).parts
+        ])
         if 0 <= idx < len(files):
             return files[idx]
     
@@ -301,11 +315,10 @@ def get_csv_path(file_identifier: str) -> Optional[Path]:
                     logger.warning(f"Blocked path traversal attempt: {match}")
                     continue  # Skip to next match
 
-    # Try S3 download as last resort
+    # Try S3 download as last resort (synchronous call — safe from any context)
     if s3_client.enabled:
         logger.info(f"File {file_identifier_csv} not found locally, attempting S3 download")
-        import asyncio
-        success = asyncio.run(s3_client.download_file(file_identifier_csv, CSV_FOLDER / file_identifier_csv))
+        success = s3_client.download_file_sync(file_identifier_csv, CSV_FOLDER / file_identifier_csv)
         if success:
             downloaded_path = CSV_FOLDER / file_identifier_csv
             if _is_safe_path(downloaded_path, CSV_FOLDER):

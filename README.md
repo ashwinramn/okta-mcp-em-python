@@ -55,16 +55,18 @@ AI:  Found 12 patterns:
 | Capability | Description |
 |------------|-------------|
 | **CSV → Okta Import** | Parse access reports, create entitlement structures, grant to users in bulk |
+| **Governance Scorecard** | Score applications 0-100 on governance posture with compliance mapping |
+| **SoD Enforcement** | Detect toxic combinations and create separation of duties risk rules |
 | **Pattern Mining** | Analyze existing grants to discover who-gets-what patterns |
-| **Bundle Creation** | Turn patterns into IGA bundles with auto-generated descriptions |
+| **SoD-Safe Bundles** | Turn patterns into IGA bundles with automatic conflict checking |
 | **Bulk Operations** | Parallel API calls with automatic rate limiting |
 | **Natural Language** | No API knowledge needed—just describe what you want |
 
 ---
 
-## 📊 Two Main Workflows
+## 📊 Four Guided Workflows
 
-### Workflow 1: CSV Import
+### Workflow 1: Migrate Legacy Access (CSV → Okta)
 **Use case:** You have a CSV export from a legacy system and need to get it into Okta IGA
 
 ```
@@ -75,15 +77,38 @@ list_csv_files  →  analyze_csv_for_entitlements  →  prepare_entitlement_stru
   CSV files               the data                    in Okta app                   grant access
 ```
 
-### Workflow 2: Pattern Mining → Bundles
-**Use case:** You have existing access in Okta and want to create bundles for access requests
+### Workflow 2: Governance Scorecard
+**Use case:** Assess an application's governance posture with a compliance report
+
+```
+generate_governance_summary(appId)
+            │
+            ▼
+   Score 0-100 + letter grade
+   Compliance checks (NIST AC-5, SOX 404, SOC2)
+   Prioritized recommendations
+```
+
+### Workflow 3: Enforce Compliance (SoD Rules)
+**Use case:** Find toxic access combinations and create separation of duties rules
+
+```
+analyze_sod_context  →  create_sod_risk_rule  →  test_sod_risk_rule
+         │                       │                        │
+         ▼                       ▼                        ▼
+  Map entitlements to      Create enforcement      Validate rules
+  ISACA duty categories    rules in Okta           against users
+```
+
+### Workflow 4: Discover & Create Roles (Pattern Mining → Bundles)
+**Use case:** You have existing access in Okta and want to create SoD-safe bundles
 
 ```
 analyze_entitlement_patterns  →  preview_bundle_creation  →  create_bundle_from_pattern
             │                             │                            │
             ▼                             ▼                            ▼
-    Discover correlations          See what would be           Create the bundle
-    between profiles &             created (dry run)            in Okta IGA
+    Discover correlations          See what would be           SoD conflict check
+    between profiles &             created (dry run)            + create bundle
       entitlements
 ```
 
@@ -103,7 +128,10 @@ okta-mcp-em-python/
 │   ├── basic.py            # CSV & connection tools
 │   ├── batch.py            # Batch operation tools
 │   ├── workflow.py         # CSV import workflow tools
-│   ├── bundle.py           # Pattern mining & bundle creation
+│   ├── bundle.py           # Pattern mining & bundle creation (SoD-safe)
+│   ├── sod.py              # Separation of duties analysis & risk rules
+│   ├── governance.py       # Governance scorecard & posture reporting
+│   ├── app_knowledge.py    # Application-specific SoD knowledge base
 │   └── menu.py             # Guided workflow navigation
 ├── csv/                    # CSV files for processing
 │   ├── test_data/          # Sample CSV files
@@ -225,12 +253,22 @@ You should see a success message with your Okta org details.
 | `prepare_entitlement_structure` | Create/update entitlements in Okta app |
 | `execute_user_grants` | Grant entitlements to users in bulk |
 
+### 📊 Governance & Compliance
+| Tool | Description |
+|------|-------------|
+| `generate_governance_summary` | Full governance posture report with score and compliance checks |
+| `analyze_sod_context` | Gather SoD analysis context for an application |
+| `create_sod_risk_rule` | Create separation of duties risk rules |
+| `list_sod_risk_rules` | List existing SoD risk rules |
+| `test_sod_risk_rule` | Run risk assessment for a user |
+
 ### 📦 Bundle Mining Workflow
 | Tool | Description |
 |------|-------------|
 | `analyze_entitlement_patterns` | Discover patterns between user profiles and entitlements |
 | `preview_bundle_creation` | Preview bundle before creation (dry run) |
-| `create_bundle_from_pattern` | Create entitlement bundle in Okta |
+| `create_bundle_from_pattern` | Create entitlement bundle from a pattern (SoD-safe) |
+| `create_entitlement_bundle` | Create bundle directly from entitlement value names |
 
 ### ⚙️ Utility Tools
 | Tool | Description |
@@ -239,6 +277,7 @@ You should see a success message with your Okta org details.
 | `okta_batch_user_search` | Search multiple users in parallel |
 | `okta_batch_create_grants` | Create multiple grants in parallel |
 | `okta_get_rate_status` | Check Okta API rate limits |
+| `get_entitlement_ids_for_values` | Resolve entitlement value names to IDs |
 
 ---
 
@@ -332,12 +371,15 @@ AI:  ✅ Bundle created successfully!
 | Feature | Description |
 |---------|-------------|
 | **Guided Workflows** | Step-by-step navigation—just follow the prompts |
+| **Governance Scorecard** | Score 0-100 with compliance checks (NIST AC-5, SOX 404, SOC2) |
+| **SoD Enforcement** | Detect toxic access combinations and create risk rules (ISACA-based) |
+| **SoD-Safe Bundles** | Bundle creation with automatic separation of duties conflict checks |
 | **Pattern Mining** | ML-free pattern discovery using correlation analysis |
 | **Natural Language Bundles** | Auto-generated descriptions for business users |
 | **Smart Rate Limiting** | Automatic throttling to respect Okta API limits |
 | **Concurrent Processing** | Parallel batch operations (up to 10x faster) |
 | **Flexible CSV Parsing** | Handles messy data, various formats, encoding issues |
-| **S3 Integration** | Optionally pull CSV files from AWS S3 |
+| **S3 Integration** | Optionally pull CSV files from AWS S3 (using boto3) |
 | **Analysis Caching** | Pattern results cached for quick bundle creation |
 
 ---

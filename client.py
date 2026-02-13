@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 
 # Load .env from project root (same directory as this file)
 PROJECT_ROOT = Path(__file__).resolve().parent
-load_dotenv(PROJECT_ROOT / ".env")
+load_dotenv(PROJECT_ROOT / ".env", override=True)
 
 # Logger setup
 logger = logging.getLogger("okta_mcp")
